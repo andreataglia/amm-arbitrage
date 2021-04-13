@@ -34,26 +34,28 @@ Codecks https://ethos.codecks.io/decks
 You have read access to the Codecks tasks. Refer to the “Covenants project” -> “Multi-AMM Arbitrage” deck. 
 
 You will find 5 tasks:
-:nokia: Fork Presto
-:nokia: Operation struct
-:nokia: Operations (includes two sub-cards which are the two operations to be developed "swap+swap" and "batch swap+swap")
-:nokia: Ui logic 
-:nokia: Testu
+### Fork Presto
+### Operation struct
+### Operations (includes two sub-cards which are the two operations to be developed "swap+swap" and "batch swap+swap")
+### Ui logic 
+### Testu
 
 The first two (as said yesterday during the call and as you can read from the cards) are suggestions rather than tasks that must be executed. 
 Each card has its own description containing all the necessary information and references to perform the tasks.
 
 
 Each card has an id code (you can find it on the top right):
--fork soon $117
--operation struct $118
--Operations $119 (swap+swap $11h, batch swap+swap $11i)
--test $11v
--ui logic $11a
+### fork soon $117
+### operation struct $118
+### Operations $119 (swap+swap $11h, batch swap+swap $11i)
+### test $11v
+### ui logic $11a
 
 The id codes must be used when committing to the github repository.
 example:
+
 "WIP (or whatever) $118" if you are committing on the operations;
 "Update test (or whatever) $11v" if you are committing on tests;
 ecc...
+
 Please always include the id code of the referenced task card.
