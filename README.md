@@ -1,6 +1,8 @@
 # Arbitrage Saga
 💥 Dragon Tournament Round 1
 
+<img src="https://external-content.duckduckgo.com/iu/?u=http%3A%2F%2Fpa1.narvii.com%2F6568%2F8faaaef7785d9412a9793965778c3e7246dfc44c_00.gif&f=1&nofb=1">
+
 ## Arbitrage Saga - ROUND 1
 Rules (Battle Royal) Estimated Duration 2 Weeks:
 
@@ -22,7 +24,7 @@ Covenants frontend github repo https://github.com/EthereansOS/covenants-interfac
 Test framework link coming soon
 Codecks https://ethos.codecks.io/decks
 
-## Codecks guidelines
+# Codecks guidelines
 You have read access to the Codecks tasks. Refer to the “Covenants project” -> “Multi-AMM Arbitrage” deck. 
 
 You will find 5 tasks:
