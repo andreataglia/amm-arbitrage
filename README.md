@@ -1,7 +1,7 @@
 # Arbitrage Saga
 💥 Dragon Tournament Round 1
 
-Arbitrage Saga - ROUND 1:wario: 
+## Arbitrage Saga - ROUND 1
 Rules (Battle Royal) Estimated Duration 2 Weeks:
 
 The team has to ask the review once the task is completed.
@@ -13,7 +13,7 @@ If the team asks for the review and code is bugged or written without following 
 Finals ends once the task are completed.
 Based on points and all of the git history from 1 to all of the 5 participant will be introduced into the next task as a formerly EthOS team member
 
-Useful links
+# Useful links
 Ethos https://ethereansos.eth.link/
 Covenants https://covenants.eth.link/#/
 Covenants documentation https://docs.ethos.wiki/covenants/
@@ -22,7 +22,7 @@ Covenants frontend github repo https://github.com/EthereansOS/covenants-interfac
 Test framework link coming soon
 Codecks https://ethos.codecks.io/decks
 
-Codecks guidelines
+## Codecks guidelines
 You have read access to the Codecks tasks. Refer to the “Covenants project” -> “Multi-AMM Arbitrage” deck. 
 
 You will find 5 tasks:
@@ -32,7 +32,7 @@ You will find 5 tasks:
 :nokia: Ui logic 
 :nokia: Testu
 
-`The first two (as said yesterday during the call and as you can read from the cards) are suggestions rather than tasks that must be executed. 
+The first two (as said yesterday during the call and as you can read from the cards) are suggestions rather than tasks that must be executed. 
 Each card has its own description containing all the necessary information and references to perform the tasks.
 
 
