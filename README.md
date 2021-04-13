@@ -17,11 +17,17 @@ Based on points and all of the git history from 1 to all of the 5 participant wi
 
 # Useful links
 Ethos https://ethereansos.eth.link/
+
 Covenants https://covenants.eth.link/#/
+
 Covenants documentation https://docs.ethos.wiki/covenants/
+
 Covenants core github repo https://github.com/EthereansOS/Covenants-Core
+
 Covenants frontend github repo https://github.com/EthereansOS/covenants-interface
+
 Test framework link coming soon
+
 Codecks https://ethos.codecks.io/decks
 
 # Codecks guidelines
