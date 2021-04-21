@@ -7,6 +7,9 @@ import "./util/DFOHub.sol";
 import "../amm-aggregator/common/IAMM.sol";
 import "./ArbitrageSagaData.sol";
 
+/// @title ArbitrageSaga
+/// @notice Performs single transaction arbitrage operation exploiting the AMMAggregator
+/// @dev An arbitrage bath has to be calculated elsewhere. The contract supports batch swap. The input token and the output token of each swap must match
 contract ArbitrageSaga  {
 
     uint256 public override constant ONE_HUNDRED = 1e18;
@@ -45,7 +48,8 @@ contract ArbitrageSaga  {
         feePercentage = _feePercentage;
     }
 
-    /** @dev Execute arbitrage operations given a certain swap path. It takes into account an expectedEarningsAmount and a allowedEarningsSlippage. If an operation leads to a final amount of token lower than expectedEarningsAmount - minExpectedEarnings, it reverts.
+    /** @notice Execute arbitrage operations given a certain swap path. 
+        @dev It takes into account an expectedEarningsAmount and a allowedEarningsSlippage. If an operation leads to a final amount of token lower than expectedEarningsAmount - minExpectedEarnings, it reverts.
         @param operations data struct containing the data regarding the operations to be executed. Every operation represents a single input token. multi token arbitrage operations is possibile via multiple operations as input.
     */
     function execute(ArbitrageSagaOperation[] memory operations) public override payable {
@@ -82,7 +86,7 @@ contract ArbitrageSaga  {
         require(true);
     }
 
-    /** @dev Transfer to the currently deployed contract all the tokens from the operations as the operation can start
+    /** @notice Transfer to the currently deployed contract all the tokens from the operations as the operation can start
      */
     function _transferToMe(ArbitrageSagaOperation[] memory operations) private {
         _collectTokens(operations);
@@ -95,7 +99,7 @@ contract ArbitrageSaga  {
         }
     }
 
-    /** @dev optimize token collection to reduce gas cost in the case of multiple tokens used on different operations
+    /** @dev Optimize token collection to reduce gas cost in the case of multiple tokens used on different operations
      */
     function _collectTokens(ArbitrageSagaOperation[] memory operations) private {
         for(uint256 i = 0; i < operations.length; i++) {
@@ -149,7 +153,7 @@ contract ArbitrageSaga  {
         return IERC20(tokenAddress).balanceOf(address(this));
     }
 
-    /** @dev Performs a swap for a certain amm and a swapPath/liquidityPoolAddresses.
+    /** @notice Performs a swap for a certain amm and a swapPath/liquidityPoolAddresses.
         @return The output token address and amount and the end of the swap operation
      */
     function _swap(ArbitrageSagaSwap memory swap) private returns (address outputTokenAdress, uint256 outputTokenAmount) {
