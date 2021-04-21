@@ -72,18 +72,22 @@ contract ArbitrageSaga  {
             // transfer back tokens to the msg sender
             // TODO: the _transferTo function is generalized for multiple receivers, however it is not really necessary here. consider imploding it down to a single transfer
             _transferTo(finalSwap.exitInETH ? address(0) : latestSwapTokenAddress, latestSwapOutputAmount, [msg.sender], [1]);
-            _checkFinalEarning(operation);
+            _checkFinalEarnings(operation);
         }
         _flushAndClear();
     }
 
-    /** @dev If minExpectedEarnings < totalEarnings revert.
+    /** @notice check whether the earnings are at least what expected, reverts otherwise 
+        @dev If minExpectedEarnings < totalEarnings reverts.
+        @param outputTokenAddress latest swap output token address
+        @param outputTokenAmount latest swap output token amount
      */
-    function _checkFinalEarning(ArbitrageSagaOperation memory operation) private {
-        // TODO: check output token is same as input token so as to calculate the totalEarnings 
-        uint256 earnings;
-        // TODO: run formula to check whether the earnings lay down in the expected range
-        require(true);
+    function _checkFinalEarnings(ArbitrageSagaOperation memory operation, address outputTokenAddress, uint256 outputTokenAmount) private {
+        address inputTokenAddress = operation.swaps[0].inputTokenAddress; 
+        // check output token is same as input token so as to calculate the totalEarnings 
+        require(inputTokenAddress == outputTokenAddress, "ArbitrageSaga Revert: operation output token address differs than the input token address");
+        uint256 inputTokenAmount = operation.swaps[0].inputTokenAmount; 
+        require(operation.minExpectedEarnings < outputTokenAmount - inputTokenAmount, "ArbitrageSaga Revert: operation output amount is lower than the expected earnings");
     }
 
     /** @notice Transfer to the currently deployed contract all the tokens from the operations as the operation can start
