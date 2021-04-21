@@ -45,26 +45,35 @@ contract ArbitrageSaga  {
         feePercentage = _feePercentage;
     }
 
-    /** @dev Execute arbitrage operations given a certain swap path. It takes into account an expectedEarningsAmount and a allowedEarningsSlippage. If an operation leads to a final amount of token lower than expectedEarningsAmount - allowedEarningsSlippage, it reverts.
+    /** @dev Execute arbitrage operations given a certain swap path. It takes into account an expectedEarningsAmount and a allowedEarningsSlippage. If an operation leads to a final amount of token lower than expectedEarningsAmount - minExpectedEarnings, it reverts.
         @param operations data struct containing the data regarding the operations to be executed. Every operation represents a single input token. multi token arbitrage operations is possibile via multiple operations as input.
     */
     function execute(ArbitrageSagaOperation[] memory operations) public override payable {
         _transferToMe(operations);
         for(uint256 i = 0 ; i < operations.length; i++) {
-            PrestoOperation memory operation = operations[i];
-            if(operation.ammPlugin == address(0)) {
-                _transferTo(operation.inputTokenAddress, operation.inputTokenAmount, operation.receivers, operation.receiversPercentages);
-            } else if(operation.liquidityPoolAddresses.length == 0) {
-                _addLiquidity(operation);
-            } else {
-                _swap(operation);
+            ArbitrageSagaSwap memory swaps = operations[i].swaps;
+            
+            address latestSwapTokenAddress;
+            uint256 latestSwapOutputAmount;
+
+            for(uint256 k = 0 ; k < swaps.length; k++) {
+                (latestSwapTokenAddress, latestSwapOutputAmount) = _swap(swaps[k]);
+                // the output of one swap becomes the input of the next swap operation
+                if(k < swaps.length - 1){
+                    swaps[k + 1].inputTokenAddress = latestSwapTokenAddress;
+                    swaps[k + 1].inputTokenAmount = latestSwapOutputAmount;
+                }
             }
-        _checkFinalEarning(operation);
+            ArbitrageSagaSwap memory finalSwap = swaps[swaps.length - 1];
+            // transfer back tokens to the msg sender
+            // TODO: the _transferTo function is generalized for multiple receivers, however it is not really necessary here. consider imploding it down to a single transfer
+            _transferTo(finalSwap.exitInETH ? address(0) : latestSwapTokenAddress, latestSwapOutputAmount, [msg.sender], [1]);
+            _checkFinalEarning(operation);
         }
         _flushAndClear();
     }
 
-    /** @dev If expectedEarningsAmount < totalEarnings - allowedEarningsSlippage revert.
+    /** @dev If minExpectedEarnings < totalEarnings revert.
      */
     function _checkFinalEarning(ArbitrageSagaOperation memory operation) private {
         // TODO: check output token is same as input token so as to calculate the totalEarnings 
@@ -75,7 +84,7 @@ contract ArbitrageSaga  {
 
     /** @dev Transfer to the currently deployed contract all the tokens from the operations as the operation can start
      */
-    function _transferToMe(PrestoOperation[] memory operations) private {
+    function _transferToMe(ArbitrageSagaOperation[] memory operations) private {
         _collectTokens(operations);
         for(uint256 i = 0; i < _tokensToTransfer.length; i++) {
             if(_tokensToTransfer[i] == address(0)) {
@@ -86,23 +95,25 @@ contract ArbitrageSaga  {
         }
     }
 
-    function _collectTokens(PrestoOperation[] memory operations) private {
+    /** @dev optimize token collection to reduce gas cost in the case of multiple tokens used on different operations
+     */
+    function _collectTokens(ArbitrageSagaOperation[] memory operations) private {
         for(uint256 i = 0; i < operations.length; i++) {
-            PrestoOperation memory operation = operations[i];
-            if(operation.ammPlugin != address(0) && operation.liquidityPoolAddresses.length == 0) {
-                IAMM amm = IAMM(operation.ammPlugin);
+            ArbitrageSagaSwap memory swapOperation = operations[i].swaps[0];
+            if(swapOperation.ammPlugin != address(0) && swapOperation.liquidityPoolAddresses.length == 0) {
+                IAMM amm = IAMM(swapOperation.ammPlugin);
                 (address ethereumAddress,,) = (amm.data());
-                (uint256[] memory amounts, address[] memory tokensAddresses) = amm.byLiquidityPoolAmount(operation.inputTokenAddress, operation.inputTokenAmount);
+                (uint256[] memory amounts, address[] memory tokensAddresses) = amm.byLiquidityPoolAmount(swapOperation.inputTokenAddress, swapOperation.inputTokenAmount);
                 bool hasEth = false;
                 for(uint256 z = 0; z < tokensAddresses.length; z++) {
                     if(tokensAddresses[z] == ethereumAddress) {
                         hasEth = true;
                     }
-                    _collectTokenData(operation.enterInETH && tokensAddresses[z] == ethereumAddress ? address(0) : tokensAddresses[z], amounts[z]);
+                    _collectTokenData(swapOperation.enterInETH && tokensAddresses[z] == ethereumAddress ? address(0) : tokensAddresses[z], amounts[z]);
                 }
-                require(!operation.enterInETH || hasEth, "Wrong use of enterInETH in addLiquidity");
+                require(!swapOperation.enterInETH || hasEth, "Wrong use of enterInETH in addLiquidity");
             } else {
-                _collectTokenData(operation.ammPlugin != address(0) && operation.enterInETH ? address(0) : operation.inputTokenAddress, operation.inputTokenAmount);
+                _collectTokenData(swapOperation.ammPlugin != address(0) && swapOperation.enterInETH ? address(0) : swapOperation.inputTokenAddress, swapOperation.inputTokenAmount);
             }
         }
     }
@@ -138,50 +149,41 @@ contract ArbitrageSaga  {
         return IERC20(tokenAddress).balanceOf(address(this));
     }
 
-    function _addLiquidity(PrestoOperation memory operation) private {
-        LiquidityPoolData memory liquidityPoolData = LiquidityPoolData(
-            operation.inputTokenAddress,
-            operation.inputTokenAmount,
-            address(0),
-            true,
-            operation.enterInETH,
-            address(this)
-        );
-        (uint256 amountOut,,) = IAMM(operation.ammPlugin).addLiquidity(liquidityPoolData);
-        _transferTo(operation.inputTokenAddress, amountOut, operation.receivers, operation.receiversPercentages);
-    }
+    /** @dev Performs a swap for a certain amm and a swapPath/liquidityPoolAddresses.
+        @return The output token address and amount and the end of the swap operation
+     */
+    function _swap(ArbitrageSagaSwap memory swap) private returns (address outputTokenAdress, uint256 outputTokenAmount) {
 
-    function _swap(PrestoOperation memory operation) private {
+        (address ethereumAddress,,) = IAMM(swap.ammPlugin).data();
 
-        (address ethereumAddress,,) = IAMM(operation.ammPlugin).data();
-
-        if(operation.exitInETH) {
-            operation.swapPath[operation.swapPath.length - 1] = ethereumAddress;
+        if(swap.exitInETH) {
+            swap.swapPath[swap.swapPath.length - 1] = ethereumAddress;
         }
 
-        address outputToken = operation.swapPath[operation.swapPath.length - 1];
+        address outputToken = swap.swapPath[swap.swapPath.length - 1];
 
         SwapData memory swapData = SwapData(
-            operation.enterInETH,
-            operation.exitInETH,
-            operation.liquidityPoolAddresses,
-            operation.swapPath,
-            operation.enterInETH ? ethereumAddress : operation.inputTokenAddress,
-            operation.inputTokenAmount,
+            swap.enterInETH,
+            swap.exitInETH,
+            swap.liquidityPoolAddresses,
+            swap.swapPath,
+            swap.enterInETH ? ethereumAddress : swap.inputTokenAddress,
+            swap.inputTokenAmount,
             address(this)
         );
 
         if(swapData.inputToken != address(0) && !swapData.enterInETH) {
-            _safeApprove(swapData.inputToken, operation.ammPlugin, swapData.amount);
+            _safeApprove(swapData.inputToken, swap.ammPlugin, swapData.amount);
         }
 
         uint256 amountOut;
         if(swapData.enterInETH) {
-            amountOut = IAMM(operation.ammPlugin).swapLiquidity{value : operation.inputTokenAmount}(swapData);
+            amountOut = IAMM(swap.ammPlugin).swapLiquidity{value : swap.inputTokenAmount}(swapData);
         } else {
-            amountOut = IAMM(operation.ammPlugin).swapLiquidity(swapData);
+            amountOut = IAMM(swap.ammPlugin).swapLiquidity(swapData);
         }
-        _transferTo(operation.exitInETH ? address(0) : outputToken, amountOut, operation.receivers, operation.receiversPercentages);
+
+        return (outputToken, amountOut);
     }
 
     /** @param totalAmount amount to calculate percentage upon
