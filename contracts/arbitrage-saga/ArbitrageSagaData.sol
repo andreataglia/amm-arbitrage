@@ -17,9 +17,5 @@ struct ArbitrageSagaSwap {
 // arbitrage operation data structure. full descriptor of a series of swaps aimed to performe an arbitrage operation
 struct ArbitrageSagaOperation {
     ArbitrageSagaSwap[] swaps;
-
-    address[] receivers;
-    uint256[] receiversPercentages;
-
     uint256 minExpectedEarnings;
 }
