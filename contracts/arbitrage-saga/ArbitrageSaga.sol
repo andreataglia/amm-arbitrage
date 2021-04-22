@@ -108,21 +108,7 @@ contract ArbitrageSaga  {
     function _collectTokens(ArbitrageSagaOperation[] memory operations) private {
         for(uint256 i = 0; i < operations.length; i++) {
             ArbitrageSagaSwap memory swapOperation = operations[i].swaps[0];
-            if(swapOperation.ammPlugin != address(0) && swapOperation.liquidityPoolAddresses.length == 0) {
-                IAMM amm = IAMM(swapOperation.ammPlugin);
-                (address ethereumAddress,,) = (amm.data());
-                (uint256[] memory amounts, address[] memory tokensAddresses) = amm.byLiquidityPoolAmount(swapOperation.inputTokenAddress, swapOperation.inputTokenAmount);
-                bool hasEth = false;
-                for(uint256 z = 0; z < tokensAddresses.length; z++) {
-                    if(tokensAddresses[z] == ethereumAddress) {
-                        hasEth = true;
-                    }
-                    _collectTokenData(swapOperation.enterInETH && tokensAddresses[z] == ethereumAddress ? address(0) : tokensAddresses[z], amounts[z]);
-                }
-                require(!swapOperation.enterInETH || hasEth, "Wrong use of enterInETH in addLiquidity");
-            } else {
-                _collectTokenData(swapOperation.ammPlugin != address(0) && swapOperation.enterInETH ? address(0) : swapOperation.inputTokenAddress, swapOperation.inputTokenAmount);
-            }
+            _collectTokenData(swapOperation.enterInETH ? address(0) : swapOperation.inputTokenAddress, swapOperation.inputTokenAmount);
         }
     }
 
