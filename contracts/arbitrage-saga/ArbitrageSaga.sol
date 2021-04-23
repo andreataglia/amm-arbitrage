@@ -6,20 +6,21 @@ pragma abicoder v2;
 import "./util/DFOHub.sol";
 import "../amm-aggregator/common/IAMM.sol";
 import "./ArbitrageSagaData.sol";
+import "./util/IERC20.sol";
 
 /// @title ArbitrageSaga
 /// @notice Performs single transaction arbitrage operation exploiting the AMMAggregator
 /// @dev An arbitrage bath has to be calculated elsewhere. The contract supports batch swap. The input token and the output token of each swap must match
-contract ArbitrageSaga  {
+contract ArbitrageSaga {
 
-    uint256 public override constant ONE_HUNDRED = 1e18;
+    uint256 public constant ONE_HUNDRED = 1e18;
 
     mapping(address => uint256) private _tokenIndex;
     address[] private _tokensToTransfer;
     uint256[] private _tokenAmounts;
 
-    address public override doubleProxy;
-    uint256 public override feePercentage;
+    address public doubleProxy;
+    uint256 public feePercentage;
 
     constructor(address _doubleProxy, uint256 _feePercentage) {
         doubleProxy = _doubleProxy;
@@ -34,17 +35,17 @@ contract ArbitrageSaga  {
         _;
     }
 
-    function feePercentageInfo() public override view returns (uint256, address) {
+    function feePercentageInfo() public view returns (uint256, address) {
         return (feePercentage, IMVDProxy(IDoubleProxy(doubleProxy).proxy()).getMVDWalletAddress());
     }
 
-    function setDoubleProxy(address _doubleProxy) public override onlyDFO {
+    function setDoubleProxy(address _doubleProxy) public onlyDFO {
         doubleProxy = _doubleProxy;
     }
 
     /** @dev Sets percentage to be taken away from the DFO at each succesfull arbitrage operation
      */
-    function setFeePercentage(uint256 _feePercentage) public override onlyDFO {
+    function setFeePercentage(uint256 _feePercentage) public onlyDFO {
         feePercentage = _feePercentage;
     }
 
@@ -52,27 +53,23 @@ contract ArbitrageSaga  {
         @dev It takes into account an expectedEarningsAmount and a allowedEarningsSlippage. If an operation leads to a final amount of token lower than expectedEarningsAmount - minExpectedEarnings, it reverts.
         @param operations data struct containing the data regarding the operations to be executed. Every operation represents a single input token. multi token arbitrage operations is possibile via multiple operations as input.
     */
-    function execute(ArbitrageSagaOperation[] memory operations) public override payable {
+    function execute(ArbitrageSagaOperation[] memory operations) public payable {
         _transferToMe(operations);
         for(uint256 i = 0 ; i < operations.length; i++) {
-            ArbitrageSagaSwap memory swaps = operations[i].swaps;
+            ArbitrageSagaSwap[] memory swaps = operations[i].swaps;
             
-            address latestSwapTokenAddress;
-            uint256 latestSwapOutputAmount;
+            address latestSwapTokenAddress = operations[0].inputTokenAddress;
+            uint256 latestSwapOutputAmount = operations[0].inputTokenAmount;
 
             for(uint256 k = 0 ; k < swaps.length; k++) {
-                (latestSwapTokenAddress, latestSwapOutputAmount) = _swap(swaps[k]);
                 // the output of one swap becomes the input of the next swap operation
-                if(k < swaps.length - 1){
-                    swaps[k + 1].inputTokenAddress = latestSwapTokenAddress;
-                    swaps[k + 1].inputTokenAmount = latestSwapOutputAmount;
-                }
+                (latestSwapTokenAddress, latestSwapOutputAmount) = _swap(swaps[k], latestSwapTokenAddress, latestSwapOutputAmount);
             }
             ArbitrageSagaSwap memory finalSwap = swaps[swaps.length - 1];
+
             // transfer back tokens to the msg sender
-            // TODO: the _transferTo function is generalized for multiple receivers, however it is not really necessary here. consider imploding it down to a single transfer
-            _transferTo(finalSwap.exitInETH ? address(0) : latestSwapTokenAddress, latestSwapOutputAmount, [msg.sender], [1]);
-            _checkFinalEarnings(operation);
+            _transferToMsgSender(finalSwap.exitInETH ? address(0) : latestSwapTokenAddress, latestSwapOutputAmount);
+            _checkFinalEarnings(operations[i], latestSwapTokenAddress, latestSwapOutputAmount);
         }
         _flushAndClear();
     }
@@ -82,12 +79,13 @@ contract ArbitrageSaga  {
         @param outputTokenAddress latest swap output token address
         @param outputTokenAmount latest swap output token amount
      */
-    function _checkFinalEarnings(ArbitrageSagaOperation memory operation, address outputTokenAddress, uint256 outputTokenAmount) private {
-        address inputTokenAddress = operation.swaps[0].inputTokenAddress; 
+    function _checkFinalEarnings(ArbitrageSagaOperation memory operation, address outputTokenAddress, uint256 outputTokenAmount) private view {
+        (address ethereumAddress,,) = IAMM(operation.swaps[0].ammPlugin).data();
+        address inputTokenAddress = operation.swaps[0].enterInETH ? ethereumAddress : operation.inputTokenAddress; 
         // check output token is same as input token so as to calculate the totalEarnings 
         require(inputTokenAddress == outputTokenAddress, "ArbitrageSaga Revert: operation output token address differs than the input token address");
-        uint256 inputTokenAmount = operation.swaps[0].inputTokenAmount; 
-        require(operation.minExpectedEarnings < outputTokenAmount - inputTokenAmount, "ArbitrageSaga Revert: operation output amount is lower than the expected earnings");
+        uint256 inputTokenAmount = operation.inputTokenAmount; 
+        require(outputTokenAmount + operation.minExpectedEarnings > inputTokenAmount, "ArbitrageSaga Revert: operation output amount is lower than the expected earnings");
     }
 
     /** @notice Transfer to the currently deployed contract all the tokens from the operations as the operation can start
@@ -108,7 +106,7 @@ contract ArbitrageSaga  {
     function _collectTokens(ArbitrageSagaOperation[] memory operations) private {
         for(uint256 i = 0; i < operations.length; i++) {
             ArbitrageSagaSwap memory swapOperation = operations[i].swaps[0];
-            _collectTokenData(swapOperation.enterInETH ? address(0) : swapOperation.inputTokenAddress, swapOperation.inputTokenAmount);
+            _collectTokenData(swap.enterInETH ? address(0) : operations[i].inputTokenAddress, operations[i].inputTokenAmount);
         }
     }
 
@@ -144,9 +142,9 @@ contract ArbitrageSaga  {
     }
 
     /** @notice Performs a swap for a certain amm and a swapPath/liquidityPoolAddresses.
-        @return The output token address and amount and the end of the swap operation
+        @return outputTokenAdress outputTokenAmount The outputTokenAdress and outputTokenAmount at the end of the swap operation
      */
-    function _swap(ArbitrageSagaSwap memory swap) private returns (address outputTokenAdress, uint256 outputTokenAmount) {
+    function _swap(ArbitrageSagaSwap memory swap, address inputTokenAddress, uint256 inputTokenAmount) private returns (address outputTokenAdress, uint256 outputTokenAmount) {
 
         (address ethereumAddress,,) = IAMM(swap.ammPlugin).data();
 
@@ -161,18 +159,18 @@ contract ArbitrageSaga  {
             swap.exitInETH,
             swap.liquidityPoolAddresses,
             swap.swapPath,
-            swap.enterInETH ? ethereumAddress : swap.inputTokenAddress,
-            swap.inputTokenAmount,
+            swap.enterInETH ? ethereumAddress : inputTokenAddress,
+            inputTokenAmount,
             address(this)
         );
 
-        if(swapData.inputToken != address(0) && !swapData.enterInETH) {
+        if(!swapData.enterInETH) {
             _safeApprove(swapData.inputToken, swap.ammPlugin, swapData.amount);
         }
 
         uint256 amountOut;
         if(swapData.enterInETH) {
-            amountOut = IAMM(swap.ammPlugin).swapLiquidity{value : swap.inputTokenAmount}(swapData);
+            amountOut = IAMM(swap.ammPlugin).swapLiquidity{value : inputTokenAmount}(swapData);
         } else {
             amountOut = IAMM(swap.ammPlugin).swapLiquidity(swapData);
         }
@@ -190,22 +188,16 @@ contract ArbitrageSaga  {
 
     /** @dev Transfer a totalAmount of tokens to some receivers, including a fee to be sent to the dfo. The fee is taken away from every transfer to each of the receivers.
      */
-    function _transferTo(address erc20TokenAddress, uint256 totalAmount, address[] memory receivers, uint256[] memory receiversPercentages) private {
+    function _transferToMsgSender(address erc20TokenAddress, uint256 totalAmount) private {
         uint256 availableAmount = totalAmount;
 
-        (uint256 dfoFeePercentage, address dfoWallet) = feePercentageInfo();
-        uint256 currentPartialAmount = dfoFeePercentage == 0 || dfoWallet == address(0) ? 0 : _calculateRewardPercentage(availableAmount, dfoFeePercentage);
-        _safeTransfer(erc20TokenAddress, dfoWallet, currentPartialAmount);
+        // (uint256 dfoFeePercentage, address dfoWallet) = feePercentageInfo();
+        // uint256 currentPartialAmount = dfoFeePercentage == 0 || dfoWallet == address(0) ? 0 : _calculateRewardPercentage(availableAmount, dfoFeePercentage);
+        uint256 currentPartialAmount = 0;
+        // _safeTransfer(erc20TokenAddress, dfoWallet, currentPartialAmount);
         availableAmount -= currentPartialAmount;
 
-        uint256 stillAvailableAmount = availableAmount;
-
-        for(uint256 i = 0; i < receivers.length - 1; i++) {
-            _safeTransfer(erc20TokenAddress, receivers[i], currentPartialAmount = _calculateRewardPercentage(stillAvailableAmount, receiversPercentages[i]));
-            availableAmount -= currentPartialAmount;
-        }
-
-        _safeTransfer(erc20TokenAddress, receivers[receivers.length - 1], availableAmount);
+        _safeTransfer(erc20TokenAddress, msg.sender, availableAmount);
     }
 
     function _safeApprove(address erc20TokenAddress, address to, uint256 value) internal {
