@@ -58,8 +58,8 @@ contract ArbitrageSaga {
         for(uint256 i = 0 ; i < operations.length; i++) {
             ArbitrageSagaSwap[] memory swaps = operations[i].swaps;
             
-            address latestSwapTokenAddress = operations[0].inputTokenAddress;
-            uint256 latestSwapOutputAmount = operations[0].inputTokenAmount;
+            address latestSwapTokenAddress = operations[i].inputTokenAddress;
+            uint256 latestSwapOutputAmount = operations[i].inputTokenAmount;
 
             for(uint256 k = 0 ; k < swaps.length; k++) {
                 // the output of one swap becomes the input of the next swap operation
@@ -85,7 +85,7 @@ contract ArbitrageSaga {
         // check output token is same as input token so as to calculate the totalEarnings 
         require(inputTokenAddress == outputTokenAddress, "ArbitrageSaga Revert: operation output token address differs than the input token address");
         uint256 inputTokenAmount = operation.inputTokenAmount; 
-        require(outputTokenAmount + operation.minExpectedEarnings > inputTokenAmount, "ArbitrageSaga Revert: operation output amount is lower than the expected earnings");
+        require(outputTokenAmount + operation.minExpectedEarnings >= inputTokenAmount, "ArbitrageSaga Revert: operation output amount is lower than the expected earnings");
     }
 
     /** @notice Transfer to the currently deployed contract all the tokens from the operations as the operation can start
@@ -190,6 +190,8 @@ contract ArbitrageSaga {
      */
     function _transferToMsgSender(address erc20TokenAddress, uint256 totalAmount) private {
         uint256 availableAmount = totalAmount;
+
+        // TODO: restore receivers list. address 0 means back to the msg.sender
 
         // (uint256 dfoFeePercentage, address dfoWallet) = feePercentageInfo();
         // uint256 currentPartialAmount = dfoFeePercentage == 0 || dfoWallet == address(0) ? 0 : _calculateRewardPercentage(availableAmount, dfoFeePercentage);
