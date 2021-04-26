@@ -56,10 +56,11 @@ contract ArbitrageSaga {
     function execute(ArbitrageSagaOperation[] memory operations) public payable {
         _transferToMe(operations);
         for(uint256 i = 0 ; i < operations.length; i++) {
-            ArbitrageSagaSwap[] memory swaps = operations[i].swaps;
+            ArbitrageSagaOperation memory operation = operations[i];
+            ArbitrageSagaSwap[] memory swaps = operation.swaps;
             
-            address latestSwapTokenAddress = operations[i].inputTokenAddress;
-            uint256 latestSwapOutputAmount = operations[i].inputTokenAmount;
+            address latestSwapTokenAddress = operation.inputTokenAddress;
+            uint256 latestSwapOutputAmount = operation.inputTokenAmount;
 
             for(uint256 k = 0 ; k < swaps.length; k++) {
                 // the output of one swap becomes the input of the next swap operation
@@ -67,9 +68,9 @@ contract ArbitrageSaga {
             }
             ArbitrageSagaSwap memory finalSwap = swaps[swaps.length - 1];
 
-            // transfer back tokens to the msg sender
-            _transferToMsgSender(finalSwap.exitInETH ? address(0) : latestSwapTokenAddress, latestSwapOutputAmount);
-            _checkFinalEarnings(operations[i], latestSwapTokenAddress, latestSwapOutputAmount);
+            // transfer back tokens to receivers
+            _checkFinalEarnings(operation, latestSwapTokenAddress, latestSwapOutputAmount);
+            _transferTo(finalSwap.exitInETH ? address(0) : latestSwapTokenAddress, latestSwapOutputAmount, operation.receivers, operation.receiversPercentages);
         }
         _flushAndClear();
     }
@@ -105,7 +106,7 @@ contract ArbitrageSaga {
      */
     function _collectTokens(ArbitrageSagaOperation[] memory operations) private {
         for(uint256 i = 0; i < operations.length; i++) {
-            ArbitrageSagaSwap memory swapOperation = operations[i].swaps[0];
+            ArbitrageSagaSwap memory swap = operations[i].swaps[0];
             _collectTokenData(swap.enterInETH ? address(0) : operations[i].inputTokenAddress, operations[i].inputTokenAmount);
         }
     }
@@ -188,18 +189,22 @@ contract ArbitrageSaga {
 
     /** @dev Transfer a totalAmount of tokens to some receivers, including a fee to be sent to the dfo. The fee is taken away from every transfer to each of the receivers.
      */
-    function _transferToMsgSender(address erc20TokenAddress, uint256 totalAmount) private {
+    function _transferTo(address erc20TokenAddress, uint256 totalAmount, address[] memory receivers, uint256[] memory receiversPercentages) private {
         uint256 availableAmount = totalAmount;
 
-        // TODO: restore receivers list. address 0 means back to the msg.sender
-
-        // (uint256 dfoFeePercentage, address dfoWallet) = feePercentageInfo();
-        // uint256 currentPartialAmount = dfoFeePercentage == 0 || dfoWallet == address(0) ? 0 : _calculateRewardPercentage(availableAmount, dfoFeePercentage);
-        uint256 currentPartialAmount = 0;
-        // _safeTransfer(erc20TokenAddress, dfoWallet, currentPartialAmount);
+        (uint256 dfoFeePercentage, address dfoWallet) = feePercentageInfo();
+        uint256 currentPartialAmount = dfoFeePercentage == 0 || dfoWallet == address(0) ? 0 : _calculateRewardPercentage(availableAmount, dfoFeePercentage);
+        _safeTransfer(erc20TokenAddress, dfoWallet, currentPartialAmount);
         availableAmount -= currentPartialAmount;
 
-        _safeTransfer(erc20TokenAddress, msg.sender, availableAmount);
+        uint256 stillAvailableAmount = availableAmount;
+
+        for(uint256 i = 0; i < receivers.length - 1; i++) {
+            _safeTransfer(erc20TokenAddress, receivers[i], currentPartialAmount = _calculateRewardPercentage(stillAvailableAmount, receiversPercentages[i]));
+            availableAmount -= currentPartialAmount;
+        }
+
+        _safeTransfer(erc20TokenAddress, receivers[receivers.length - 1], availableAmount);
     }
 
     function _safeApprove(address erc20TokenAddress, address to, uint256 value) internal {

@@ -10,7 +10,7 @@ var path = require('path');
 var fs = require('fs');
 var glob = require("glob");
 
-// TODO: hardcode liquidityPools for balancer as the IAMM byTokens won't return the pool address in that case.
+// TODO: hardcode liquidityPools for Balancer as the IAMM byTokens won't return the pool address in that case.
 
 describe("AribtrageSaga", () => {
 
