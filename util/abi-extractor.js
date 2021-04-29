@@ -10,6 +10,8 @@ async function main() {
     });
     var abis = "";
     var contracts = {}
+
+    let firstFileCorrectlyParsed = false;
     for(var i in files) {
         var file = files[i = parseInt(i)];
         var name = file.substring(file.lastIndexOf("/") + 1).split(".sol").join("") + "ABI";
@@ -17,7 +19,8 @@ async function main() {
             continue;
         }
         try {
-            abis += `\n    "${name}": ${JSON.stringify(contracts[name] = (await compile(file)).abi)}${i === files.length - 1 ? '' : ','}`
+            abis += `${!firstFileCorrectlyParsed ? '' : ','}\n    "${name}": ${JSON.stringify(contracts[name] = (await compile(file)).abi)}`
+            firstFileCorrectlyParsed = true;
         } catch(e) {
         }
     }
