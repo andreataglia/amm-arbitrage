@@ -32,7 +32,7 @@ describe("ArbitrageSaga", () => {
 
     tokens = [
       context.wethTokenAddress,
-      //context.usdtTokenAddress,
+      context.usdtTokenAddress,
       context.chainLinkTokenAddress,
       context.usdcTokenAddress,
       context.daiTokenAddress,
@@ -77,6 +77,7 @@ describe("ArbitrageSaga", () => {
         (amm.multipleTokenLiquidityPoolAddress = web3.utils.toChecksumAddress(
           "0x9b208194acc0a8ccb2a8dcafeacfbb7dcc093f81"
         ));
+      delete gottenAMMS.balancer;
     }
 
     return gottenAMMS;
@@ -174,6 +175,17 @@ describe("ArbitrageSaga", () => {
     return tokenAddress;
   }
 
+  function randomNumberOfTokenAddress(tokensNumber) {
+    let tokenAddresses = [];
+    while (tokenAddresses.length < tokensNumber) {
+      const generatedAddress = randomTokenAddress();
+      if (!tokenAddresses.includes(generatedAddress)) {
+        tokenAddresses.push(generatedAddress);
+      }
+    }
+    return tokenAddresses;
+  }
+
   function randomPlainAmount(length, step) {
     var test = [];
     for (var i = 0; i < (length || 70); i++) {
@@ -233,7 +245,106 @@ describe("ArbitrageSaga", () => {
     return data;
   }
 
+  async function encodeSingleOperation(
+    inputToken,
+    inputAmount,
+    swaps = [],
+    minEarning,
+    receivers = [],
+    reciversPcg = []
+  ) {
+    let encodedSwaps = [];
+    let inputTokenIterator = inputToken;
+    for (let i = 0; i < swaps.length; i++) {
+      const encodedSwap = await encodeSwap(
+        swaps[i].amm,
+        inputTokenIterator,
+        swaps[i].swapPath
+      );
+      inputTokenIterator = swaps[i].swapPath[swaps[i].swapPath.length - 1];
+      encodedSwaps.push(encodedSwap);
+    }
+    return {
+      inputTokenAddress: inputToken,
+      inputTokenAmount: inputAmount,
+      swaps: encodedSwaps,
+      minExpectedEarnings: minEarning,
+      receivers: receivers,
+      receiversPercentages: reciversPcg,
+    };
+  }
+
+  async function encodeSwap(amm, inputToken, swapPath = []) {
+    const enterInEth = amm.ethereumAddress === inputToken ? true : false;
+    let LPPools = [];
+    let tokenIterator = inputToken;
+
+    for (let j = 0; j < swapPath.length; j++) {
+      const LPPool = (
+        await amm.contract.methods.byTokens([tokenIterator, swapPath[j]]).call()
+      )[2];
+      if (LPPool === utilities.voidEthereumAddress) {
+        throw Error(
+          "Liquidity pool does not exist for tokens: " +
+            tokenIterator +
+            " and " +
+            swapPath[j] +
+            " in AMM plugin: " +
+            amm.address
+        );
+      }
+      tokenIterator = swapPath[j];
+      LPPools.push(LPPool);
+    }
+    return {
+      ammPlugin: amm.address,
+      liquidityPoolAddresses: LPPools,
+      swapPath: swapPath,
+      enterInEth: enterInEth,
+      exitInEth:
+        amm.ethereumAddress === swapPath[swapPath.length - 1] ? true : false,
+    };
+  }
+
+  function censor(censor) {
+    var i = 0;
+    return function (key, value) {
+      if (
+        i !== 0 &&
+        typeof censor === "object" &&
+        typeof value == "object" &&
+        censor == value
+      )
+        return "[Circular]";
+      if (i >= 29)
+        // seems to be a harded maximum of 30 serialized objects?
+        return "[Unknown]";
+      ++i; // so we know we aren't using the original object anymore
+      return value;
+    };
+  }
+
   it("Test", async () => {
-    assertstrictEqual(1, 1);
+    const tokenAddresses = randomNumberOfTokenAddress(4);
+    console.log("INPUT TOKEN: " + tokenAddresses);
+    const swap = [
+      { amm: AMMs.uniswap, swapPath: tokenAddresses.slice(1, 3) },
+      { amm: AMMs.sushiSwap, swapPath: tokenAddresses.slice(-1) },
+    ];
+    console.log(swap);
+    try {
+      const resp = await encodeSingleOperation(
+        tokenAddresses[0],
+        "123444444446636",
+        swap,
+        "455666",
+        [(await web3.eth.getAccounts())[1]],
+        ["1000000000"]
+      );
+      console.log("Censoring: ", resp);
+      console.log("Result: ", JSON.stringify(resp, censor(resp)));
+    } catch (e) {
+      console.log(e);
+    }
   });
 });
