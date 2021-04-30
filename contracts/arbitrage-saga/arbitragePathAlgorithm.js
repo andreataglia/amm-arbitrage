@@ -4,6 +4,9 @@ const context = require("../../util/context.json");
 const utilities = require("../../util/utilities");
 const abis = require("../../data/abis.json");
 
+// TODO: temp web3 injection TO BE DELETED once branch merged back to main
+global.web3 = web3;
+
 // The mainnet address of the AMM Aggregator
 // docs: https://docs.ethos.wiki/covenants/protocols/amm-aggregator/dapp-integration
 const ammAggregatorAddress = "0x81391d117a03A6368005e447197739D06550D4CD";
@@ -27,12 +30,25 @@ let initialTokenAddress;
 let initialTokenAmount;
 
 
-async function init(inputTokenAddress, inputTokenAmount){
+async function init(inputTokenAddress, inputTokenAmount) {
     ammAggregator = new web3.eth.Contract(AMMAggregator, ammAggregatorAddress);
     initialTokenAddress = inputTokenAddress;
     initialTokenAmount = inputTokenAmount;
-    const result = await findBestArbitragePathForInputToken(initialTokenAddress, initialTokenAmount, []);
-    console.log(result);
+    // const result = await findBestArbitragePathForInputToken(initialTokenAddress, initialTokenAmount, []);
+    // console.log(result);
+
+    await calculateSingleSwapOutput(inputTokenAddress, inputTokenAmount, context.usdcTokenAddress);
+
+    // struct ArbitrageSagaOperation {
+    //     address inputTokenAddress;
+    //     uint256 inputTokenAmount;
+    
+    //     ArbitrageSagaSwap[] swaps;
+    //     uint256 minExpectedEarnings;
+    
+    //     address[] receivers;
+    //     uint256[] receiversPercentages;
+    // }
 }
 
 // try out all possible arbitrage paths with with depth limited by the token list, and breadth limited by a fixed constant
@@ -49,6 +65,7 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
 
     let results = [];
     
+    // TODO: find bets swap amount with all exchange before going ahead
     for (let i = 0; i < tokensList.length; i++) {
         const nextTokenToSwap = tokensList[i];   
         if(nextTokenToSwap !== inputToken) {
@@ -73,19 +90,27 @@ function calculateSampleSwapOutput(inputTokenAddress, inputTokenAmount, outputTo
 
 // returns the token output for that pool, for that AMM
 // only single pairs calculation.
-async function calculateSingleSwapOutput(inputTokenAddress, inputTokenAmount, outputTokenAddress){
+async function calculateSingleSwapOutput(inputTokenAddress, inputTokenAmount, outputTokenAddress) {
     const uniswapv2AmmPlugin = await findAMMPluginByName("uniswapv2");
     const LPAddress = await fetchLPAddress([inputTokenAddress, outputTokenAddress], uniswapv2AmmPlugin);
 
     if(LPAddress !== utilities.voidEthereumAddress) {
         const swapData = await retrieveSwapData([inputTokenAddress, outputTokenAddress], uniswapv2AmmPlugin);
+        
+        // some tokens don't have 18 decimals... jerks
+        const fixedInputAmount = fixTokenDecimalsFrom18ToLower(inputTokenAddress, inputTokenAmount);
+
         // getSwapOutput: Pass a token address, the desired amount to swap, an array containing the LP addresses involved in the swap operation and an array representing the path the operation must follow, 
         // and retrieve an array containing the amount of tokens used during the swap operation, including the final token amount (in the last position) and the input token amount (in the first position).
-        const swapResult = await uniswapv2AmmPlugin.methods.getSwapOutput(inputTokenAddress, inputTokenAmount, swapData.swapPools, swapData.swapTokens).call();
-        // last position containsthe swap final token amount 
-        return swapResult[swapResult.length - 1];
+        const swapResult = await uniswapv2AmmPlugin.methods.getSwapOutput(inputTokenAddress, fixedInputAmount, swapData.swapPools, swapData.swapTokens).call();
+        // some tokens don't have 18 decimals... jerks
+        // last position of swapResult contains the swap final token amount
+        const tokenOutput = await fixTokenDecimalsTo18(outputTokenAddress, swapResult[swapResult.length - 1]);
+
+        return tokenOutput;
     }
-    return -1;
+    // the swap is just not happening
+    return null;
 }
 
 
@@ -136,5 +161,33 @@ async function findAMMPluginByName(ammName){
     return Object.entries(ammPlugins).filter(entry => entry[0].toLowerCase().indexOf(ammName) !== -1)[0][1];
 }
 
+// expecting the token amount to be the base contract one. returns that value fixed to 1e18
+async function fixTokenDecimalsTo18(tokenAddress, tokenAmount) {
+    const tokenContract = new web3.eth.Contract(abis.IERC20ABI, tokenAddress);
+    const decimals = parseInt(await tokenContract.methods.decimals().call());
+    if(decimals === 18) return tokenAmount;
+    if(decimals < 18){
+        return utilities.toDecimals(tokenAmount, 18);
+    }
+    throw Error(`decimals above 18 for token ${tokenAddress}`);
+}
+
+// usdc for instance expects the decimals to be 6. the function expects a 18 decimals input and throws back with the decimals needed by the token
+async function fixTokenDecimalsFrom18ToLower(tokenAddress, tokenAmount) {
+    let decimals;
+    try {
+        const tokenContract = new web3.eth.Contract(abis.IERC20ABI, tokenAddress);
+        decimals = await tokenContract.methods.decimals().call();
+    }catch(err){
+        console.log(err);
+    }
+    decimals = parseInt(decimals);
+    if(decimals === 18) return tokenAmount;
+    if(decimals < 18){
+        return utilities.toDecimals(tokenAmount, decimals);
+    }
+    throw Error(`decimals above 18 for token ${tokenAddress}`);
+}
+
 // TODO: use utilities.toDecimals('10', '18'). need web3 injected first..
-init('a', 1);
+init(context.daiTokenAddress, utilities.toDecimals('10', '18'));
