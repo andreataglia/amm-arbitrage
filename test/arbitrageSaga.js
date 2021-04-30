@@ -9,12 +9,15 @@ var abi = new ethers.utils.AbiCoder();
 var path = require("path");
 var fs = require("fs");
 var glob = require("glob");
+const { TIMEOUT } = require("dns");
 
 describe("ArbitrageSaga", () => {
   var buyForETHAmount = 5000;
   var ammAggregator;
   var tokens;
   var AMMs;
+  var arbitrageSaga;
+  var feePercentage;
 
   before(async () => {
     await blockchainConnection.init;
@@ -43,6 +46,19 @@ describe("ArbitrageSaga", () => {
     await Promise.all(
       tokens.map((it) => buyForETH(it, buyForETHAmount, AMMs.uniswap.contract))
     );
+
+    var ArbitrageSaga = await compile("arbitrage-saga/ArbitrageSaga.sol");
+
+    feePercentage = web3.utils.toWei("0.01");
+
+    const doubleProxy = await ammAggregator.methods.doubleProxy().call();
+
+    arbitrageSaga = await new web3.eth.Contract(ArbitrageSaga.abi)
+      .deploy({
+        data: ArbitrageSaga.bin,
+        arguments: [doubleProxy, feePercentage],
+      })
+      .send(blockchainConnection.getSendingOptions());
   });
 
   async function getAMMS() {
@@ -175,11 +191,17 @@ describe("ArbitrageSaga", () => {
     return tokenAddress;
   }
 
-  function randomNumberOfTokenAddress(tokensNumber) {
+  function randomNumberOfTokenAddress(tokensNumber, tokenExcluded) {
     let tokenAddresses = [];
+    if (tokenExcluded === utilities.voidEthereumAddress) {
+      tokenExcluded = context.wethTokenAddress;
+    }
     while (tokenAddresses.length < tokensNumber) {
       const generatedAddress = randomTokenAddress();
-      if (!tokenAddresses.includes(generatedAddress)) {
+      if (
+        !tokenAddresses.includes(generatedAddress) &&
+        generatedAddress !== tokenExcluded
+      ) {
         tokenAddresses.push(generatedAddress);
       }
     }
@@ -264,6 +286,19 @@ describe("ArbitrageSaga", () => {
       inputTokenIterator = swaps[i].swapPath[swaps[i].swapPath.length - 1];
       encodedSwaps.push(encodedSwap);
     }
+    console.log("PARAMS FINALS:  ");
+    console.log(
+      "-------------------------------------------------------------------"
+    );
+    console.log(inputToken);
+    console.log(
+      "-------------------------------------------------------------------"
+    );
+    console.log(inputAmount);
+    console.log(
+      "-------------------------------------------------------------------"
+    );
+    console.log(encodedSwaps);
     return {
       inputTokenAddress: inputToken,
       inputTokenAmount: inputAmount,
@@ -275,10 +310,17 @@ describe("ArbitrageSaga", () => {
   }
 
   async function encodeSwap(amm, inputToken, swapPath = []) {
-    const enterInEth = amm.ethereumAddress === inputToken ? true : false;
+    const enterInEth =
+      amm.ethereumAddress === inputToken ||
+      utilities.voidEthereumAddress === inputToken
+        ? true
+        : false;
+    let tokenIterator =
+      amm.ethereumAddress === inputToken ||
+      utilities.voidEthereumAddress === inputToken
+        ? amm.ethereumAddress
+        : inputToken;
     let LPPools = [];
-    let tokenIterator = inputToken;
-
     for (let j = 0; j < swapPath.length; j++) {
       const LPPool = (
         await amm.contract.methods.byTokens([tokenIterator, swapPath[j]]).call()
@@ -302,8 +344,49 @@ describe("ArbitrageSaga", () => {
       swapPath: swapPath,
       enterInEth: enterInEth,
       exitInEth:
-        amm.ethereumAddress === swapPath[swapPath.length - 1] ? true : false,
+        amm.ethereumAddress === swapPath[swapPath.length - 1] ||
+        utilities.voidEthereumAddress === swapPath[swapPath.length - 1]
+          ? true
+          : false,
     };
+  }
+
+  function createRandomSwapPath(
+    numberOfToken,
+    isInputTokenEther = false,
+    ammsData = []
+  ) {
+    const inputToken = isInputTokenEther
+      ? utilities.voidEthereumAddress
+      : randomTokenAddress();
+    const randomAddresses = randomNumberOfTokenAddress(
+      numberOfToken,
+      inputToken
+    );
+    const tokenAddresses = [inputToken]
+      .concat(randomAddresses)
+      .concat([inputToken]);
+    let sliceIterator = 1;
+    let swaps = [];
+    for (let j = 0; j < ammsData.length - 1; j++) {
+      const singleSwap = {
+        amm: ammsData[j].amm,
+        swapPath: tokenAddresses.slice(
+          sliceIterator,
+          ammsData[j].numberOfTokens + sliceIterator
+        ),
+      };
+      swaps.push(singleSwap);
+      sliceIterator = ammsData[j].numberOfTokens + sliceIterator;
+    }
+    const lastSwap = {
+      amm: ammsData[ammsData.length - 1].amm,
+      swapPath: tokenAddresses
+        .slice(-ammsData[ammsData.length - 1].numberOfTokens)
+        .flat(),
+    };
+    swaps.push(lastSwap);
+    return { inputToken, swaps };
   }
 
   function censor(censor) {
@@ -324,22 +407,80 @@ describe("ArbitrageSaga", () => {
     };
   }
 
-  it("Test", async () => {
-    const tokenAddresses = randomNumberOfTokenAddress(4);
-    console.log("INPUT TOKEN: " + tokenAddresses);
-    const swap = [
-      { amm: AMMs.uniswap, swapPath: tokenAddresses.slice(1, 3) },
-      { amm: AMMs.sushiSwap, swapPath: tokenAddresses.slice(-1) },
-    ];
-    console.log(swap);
+  async function generateRandomAmount(inputToken) {
+    const account = (await web3.eth.getAccounts())[0];
+    let balance = web3.utils.fromWei((await totalSum(account))[inputToken]);
+    const scaledBalance =
+      balance < 1 ? parseInt(web3.utils.toWei(balance).toString()) : balance;
+    const randomAmount = randomPlainAmount(
+      100,
+      Math.floor(scaledBalance) / 100
+    );
+    return balance < 1
+      ? randomAmount
+      : web3.utils.toWei(randomAmount.toString());
+  }
+
+  async function encodeRandomSingleOperation(
+    numberOfToken,
+    isInputTokenEther = false,
+    ammsData = [],
+    minEarning,
+    receivers = [],
+    reciversPcg = []
+  ) {
+    const { inputToken, swaps } = createRandomSwapPath(
+      numberOfToken,
+      isInputTokenEther,
+      ammsData
+    );
+    const amount = await generateRandomAmount(inputToken);
+    await encodeSingleOperation(
+      inputToken,
+      amount,
+      swaps,
+      minEarning,
+      receivers,
+      reciversPcg
+    );
+  }
+
+  function timeout(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function repeatUntilGood(functionToCheck, ...arguments) {
+    let isGood = false;
+    let trial = 0;
+    while (isGood === false) {
+      await timeout(10000);
+      try {
+        const response = await functionToCheck.apply(this, arguments);
+        return response;
+      } catch (e) {
+        console.log(e);
+        trial++;
+        console.log("Trial: " + trial);
+      }
+    }
+  }
+
+  it("Single operation with input token Ether", async () => {
     try {
-      const resp = await encodeSingleOperation(
-        tokenAddresses[0],
-        "123444444446636",
-        swap,
-        "455666",
-        [(await web3.eth.getAccounts())[1]],
-        ["1000000000"]
+      const resp = await repeatUntilGood(
+        encodeRandomSingleOperation,
+        ...[
+          3,
+          true,
+          [
+            { amm: AMMs.uniswap, numberOfTokens: 2 },
+            { amm: AMMs.sushiSwap, numberOfTokens: 1 },
+            { amm: AMMs.mooniswap, numberOfTokens: 1 },
+          ],
+          "455666",
+          account,
+          ["1000000000"],
+        ]
       );
       console.log("Censoring: ", resp);
       console.log("Result: ", JSON.stringify(resp, censor(resp)));
