@@ -42,7 +42,7 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
     if(currentPath.length === BREADTH - 1){
         const newPath = currentPath.concat(initialTokenAddress);
         return {
-            outputAmount: randomNumber(),
+            outputAmount: calculateSampleSwapOutput(inputToken, inputTokenAmount, currentPath.pop()),
             path: newPath
         }
     }
@@ -53,7 +53,8 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
         const nextTokenToSwap = tokensList[i];   
         if(nextTokenToSwap !== inputToken) {
             const newPath = currentPath.concat(inputToken);
-            results.push(await findBestArbitragePathForInputToken(nextTokenToSwap, inputTokenAmount+randomNumber(), newPath));
+            const newAmount = calculateSampleSwapOutput(inputToken, inputTokenAmount, nextTokenToSwap);
+            results.push(await findBestArbitragePathForInputToken(nextTokenToSwap, newAmount, newPath));
         }
     }
     
@@ -63,9 +64,10 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
 }
 
 
-// let prova = await calculateSingleSwapOutput(inputToken, inputTokenAmount, context.daiTokenAddress);
-function randomNumber(){
-    return Math.random();
+function calculateSampleSwapOutput(inputTokenAddress, inputTokenAmount, outputTokenAddress) {
+    if(outputTokenAddress === 'b') return inputTokenAmount * 0.9;
+    if(outputTokenAddress === 'c') return inputTokenAmount * 1.1;
+    if(outputTokenAddress === 'a') return inputTokenAmount * 0.8;
 }
 
 
@@ -76,7 +78,6 @@ async function calculateSingleSwapOutput(inputTokenAddress, inputTokenAmount, ou
     const LPAddress = await fetchLPAddress([inputTokenAddress, outputTokenAddress], uniswapv2AmmPlugin);
 
     if(LPAddress !== utilities.voidEthereumAddress) {
-
         const swapData = await retrieveSwapData([inputTokenAddress, outputTokenAddress], uniswapv2AmmPlugin);
         // getSwapOutput: Pass a token address, the desired amount to swap, an array containing the LP addresses involved in the swap operation and an array representing the path the operation must follow, 
         // and retrieve an array containing the amount of tokens used during the swap operation, including the final token amount (in the last position) and the input token amount (in the first position).
