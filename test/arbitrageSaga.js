@@ -12,13 +12,14 @@ var glob = require("glob");
 const { TIMEOUT } = require("dns");
 
 describe("ArbitrageSaga", () => {
-  var buyForETHAmount = 5000;
+  var buyForETHAmount = 1;
   var ammAggregator;
   var tokens;
   var AMMs;
   var arbitrageSaga;
   var feePercentage;
-  var recipientPercentages = [50, 50];
+  var sender;
+  var recipientPercentages;
   var recipentAddresses;
 
   before(async () => {
@@ -37,11 +38,11 @@ describe("ArbitrageSaga", () => {
 
     tokens = [
       context.wethTokenAddress,
-      context.usdtTokenAddress,
-      // context.chainLinkTokenAddress,
+      //context.usdtTokenAddress,
+      context.chainLinkTokenAddress,
       context.usdcTokenAddress,
       context.daiTokenAddress,
-      context.mkrTokenAddress,
+      // context.mkrTokenAddress,
       // context.balTokenAddress,
     ].map((it) => new web3.eth.Contract(context.IERC20ABI, it));
 
@@ -51,13 +52,16 @@ describe("ArbitrageSaga", () => {
 
     var ArbitrageSaga = await compile("arbitrage-saga/ArbitrageSaga.sol");
 
-    feePercentage = web3.utils.toWei("0.01");
+    feePercentage = web3.utils.toWei("0");
+
+    sender = (await web3.eth.getAccounts())[0];
 
     recipentAddresses = [
       (await web3.eth.getAccounts())[1],
       (await web3.eth.getAccounts())[2],
     ];
 
+    recipientPercentages = [web3.utils.toWei("0.5"), web3.utils.toWei("0.5")];
     const doubleProxy = await ammAggregator.methods.doubleProxy().call();
 
     arbitrageSaga = await new web3.eth.Contract(ArbitrageSaga.abi)
@@ -357,9 +361,10 @@ describe("ArbitrageSaga", () => {
     isInputTokenEther = false,
     ammsData = []
   ) {
-    const inputToken = isInputTokenEther
+    let inputToken = isInputTokenEther
       ? utilities.voidEthereumAddress
-      : randomTokenAddress();
+      : randomTokenAddress([context.wethTokenAddress]);
+
     const randomAddresses = randomNumberOfTokenAddress(
       numberOfToken,
       inputToken
@@ -409,13 +414,12 @@ describe("ArbitrageSaga", () => {
   }
 
   async function generateRandomAmount(inputToken) {
-    const account = (await web3.eth.getAccounts())[0];
-    let balance = web3.utils.fromWei((await totalSum(account))[inputToken]);
+    let balance = web3.utils.fromWei((await totalSum(sender))[inputToken]);
     const scaledBalance =
       balance < 1 ? parseInt(web3.utils.toWei(balance).toString()) : balance;
     const randomAmount = randomPlainAmount(
       100,
-      Math.floor(scaledBalance / 2) / 99
+      Math.floor(scaledBalance / 2) / 101
     );
     return balance < 1
       ? Math.floor(randomAmount)
@@ -445,6 +449,26 @@ describe("ArbitrageSaga", () => {
       reciversPcg
     );
     return operation;
+  }
+
+  async function getOutputAmount(inputTokenAddress, inputAmount, swaps) {
+    var IAMM = await compile("amm-aggregator/common/IAMM");
+    var iteratorAmount = inputAmount;
+    var iteratorToken = inputTokenAddress;
+    for (var j = 0; j < swaps.length; j++) {
+      const amm = new web3.eth.Contract(IAMM.abi, swaps[j].ammPlugin);
+      const outputAmounts = await amm.methods
+        .getSwapOutput(
+          iteratorToken,
+          iteratorAmount,
+          swaps[j].liquidityPoolAddresses,
+          swaps[j].swapPath
+        )
+        .call();
+      iteratorAmount = outputAmounts[outputAmounts.length - 1];
+      iteratorToken = swaps[j].swapPath[swaps[j].swapPath.length - 1];
+    }
+    return iteratorAmount;
   }
 
   function timeout(ms) {
@@ -481,7 +505,26 @@ describe("ArbitrageSaga", () => {
         recipientPercentages,
       ]
     );
-    console.log("Opeartion: ", JSON.stringify(operation, censor(operation)));
+    console.log("Operation: ", JSON.stringify(operation, censor(operation)));
+
+    const prevSenderBalance = web3.utils.toBN(
+      (await totalSum(sender))[operation.inputTokenAddress]
+    );
+    const prevFirstRecipientBalance = web3.utils.toBN(
+      (await totalSum(recipentAddresses[0]))[operation.inputTokenAddress]
+    );
+    const prevSecondRecipientBalance = web3.utils.toBN(
+      (await totalSum(recipentAddresses[1]))[operation.inputTokenAddress]
+    );
+
+    const outputAmount = web3.utils.toBN(
+      await getOutputAmount(
+        operation.inputTokenAddress,
+        operation.inputTokenAmount,
+        operation.swaps
+      )
+    );
+
     const tokenInstance = new web3.eth.Contract(
       context.IERC20ABI,
       operation.inputTokenAddress
@@ -489,15 +532,48 @@ describe("ArbitrageSaga", () => {
     await tokenInstance.methods
       .approve(arbitrageSaga.options.address, operation.inputTokenAmount)
       .send(blockchainConnection.getSendingOptions());
+
     var transaction = await arbitrageSaga.methods
       .execute([operation])
       .send(blockchainConnection.getSendingOptions());
     console.log(
-      "Tranasction " +
+      "Transaction " +
         transaction.transactionHash +
         " with " +
         transaction.gasUsed +
         " of gas used"
+    );
+
+    const actualSenderBalance = web3.utils.toBN(
+      (await totalSum(sender))[operation.inputTokenAddress]
+    );
+    const actualFirstRecipientBalance = web3.utils.toBN(
+      (await totalSum(recipentAddresses[0]))[operation.inputTokenAddress]
+    );
+    const actualSecondRecipientBalance = web3.utils.toBN(
+      (await totalSum(recipentAddresses[1]))[operation.inputTokenAddress]
+    );
+
+    assert.equal(
+      actualSenderBalance.toString(),
+      prevSenderBalance
+        .sub(web3.utils.toBN(operation.inputTokenAmount))
+        .toString(),
+      "Wrong sender balance"
+    );
+    assert.equal(
+      actualFirstRecipientBalance.toString(),
+      prevFirstRecipientBalance
+        .add(outputAmount.div(web3.utils.toBN(2)))
+        .toString(),
+      "Wrong first recipient balance"
+    );
+    assert.equal(
+      actualSecondRecipientBalance.toString(),
+      prevFirstRecipientBalance
+        .add(outputAmount.sub(outputAmount.div(web3.utils.toBN(2))))
+        .toString(),
+      "Wrong second recipient balance"
     );
   });
 
@@ -518,13 +594,11 @@ describe("ArbitrageSaga", () => {
       ]
     );
     console.log("Result: ", JSON.stringify(operation, censor(operation)));
-    var transaction = await arbitrageSaga.methods
-      .execute([operation])
-      .send(
-        blockchainConnection.getSendingOptions({
-          value: operation.inputTokenAmount,
-        })
-      );
+    var transaction = await arbitrageSaga.methods.execute([operation]).send(
+      blockchainConnection.getSendingOptions({
+        value: operation.inputTokenAmount,
+      })
+    );
     console.log(
       "Tranasction " +
         transaction.transactionHash +
@@ -553,6 +627,7 @@ describe("ArbitrageSaga", () => {
       "Result first operation: ",
       JSON.stringify(firstOperation, censor(firstOperation))
     );
+
     let tokenInstance = new web3.eth.Contract(
       context.IERC20ABI,
       firstOperation.inputTokenAddress
@@ -560,6 +635,7 @@ describe("ArbitrageSaga", () => {
     await tokenInstance.methods
       .approve(arbitrageSaga.options.address, firstOperation.inputTokenAmount)
       .send(blockchainConnection.getSendingOptions());
+
     const secondOperation = await repeatUntilGood(
       encodeRandomSingleOperation,
       ...[
@@ -578,6 +654,7 @@ describe("ArbitrageSaga", () => {
       "Result second operation: ",
       JSON.stringify(secondOperation, censor(secondOperation))
     );
+
     tokenInstance = new web3.eth.Contract(
       context.IERC20ABI,
       secondOperation.inputTokenAddress
@@ -591,13 +668,54 @@ describe("ArbitrageSaga", () => {
     await tokenInstance.methods
       .approve(arbitrageSaga.options.address, approvalAmount)
       .send(blockchainConnection.getSendingOptions());
+
+    const firstOutputAmount = web3.utils.toBN(
+      await getOutputAmount(
+        firstOperation.inputTokenAddress,
+        firstOperation.inputTokenAmount,
+        firstOperation.swaps
+      )
+    );
+    const secondOutputAmount = web3.utils.toBN(
+      await getOutputAmount(
+        secondOperation.inputTokenAddress,
+        secondOperation.inputTokenAmount,
+        secondOperation.swaps
+      )
+    );
+
+    const prevSenderBalance = [
+      web3.utils.toBN(
+        (await totalSum(sender))[firstOperation.inputTokenAddress]
+      ),
+      web3.utils.toBN(
+        (await totalSum(sender))[secondOperation.inputTokenAddress]
+      ),
+    ];
+    const prevFirstRecipientBalance = [
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[0]))[firstOperation.inputTokenAddress]
+      ),
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[0]))[
+          secondOperation.inputTokenAddress
+        ]
+      ),
+    ];
+    const prevSecondRecipientBalance = [
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[1]))[firstOperation.inputTokenAddress]
+      ),
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[1]))[
+          secondOperation.inputTokenAddress
+        ]
+      ),
+    ];
+
     var transaction = await arbitrageSaga.methods
       .execute([firstOperation, secondOperation])
-      .send(
-        blockchainConnection.getSendingOptions({
-          value: operation.inputTokenAmount,
-        })
-      );
+      .send(blockchainConnection.getSendingOptions({}));
     console.log(
       "Tranasction " +
         transaction.transactionHash +
@@ -605,6 +723,80 @@ describe("ArbitrageSaga", () => {
         transaction.gasUsed +
         " of gas used"
     );
+
+    const actualSenderBalance = [
+      web3.utils.toBN(
+        (await totalSum(sender))[firstOperation.inputTokenAddress]
+      ),
+      web3.utils.toBN(
+        (await totalSum(sender))[secondOperation.inputTokenAddress]
+      ),
+    ];
+    const actualFirstRecipientBalance = [
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[0]))[firstOperation.inputTokenAddress]
+      ),
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[0]))[
+          secondOperation.inputTokenAddress
+        ]
+      ),
+    ];
+    const actualSecondRecipientBalance = [
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[1]))[firstOperation.inputTokenAddress]
+      ),
+      web3.utils.toBN(
+        (await totalSum(recipentAddresses[1]))[
+          secondOperation.inputTokenAddress
+        ]
+      ),
+    ];
+
+    if (
+      firstOperation.inputTokenAddress === secondOperation.inputTokenAddress
+    ) {
+      const firstSingleOutputAmount = firstOutputAmount
+        .div(web3.utils.toBN(2))
+        .add(secondOutputAmount.div(web3.utils.toBN(2)));
+      const usedAmount = web3.utils
+        .toBN(firstOperation.inputTokenAmount)
+        .add(web3.utils.toBN(secondOperation.inputTokenAmount));
+      assert.equal(
+        actualSenderBalance[0].toString(),
+        prevSenderBalance[0].sub(usedAmount).toString(),
+        "Wrong sender balance"
+      );
+    } else {
+      assert.equal(
+        actualSenderBalance[0].toString(),
+        prevSenderBalance[0]
+          .sub(web3.utils.toBN(firstOperation.inputTokenAmount))
+          .toString(),
+        "Wrong sender balance"
+      );
+      assert.equal(
+        actualSenderBalance[1].toString(),
+        prevSenderBalance[1]
+          .sub(web3.utils.toBN(secondOperation.inputTokenAmount))
+          .toString(),
+        "Wrong sender balance"
+      );
+      assert.equal(
+        actualFirstRecipientBalance[0].toString(),
+        prevFirstRecipientBalance[0]
+          .add(firstOutputAmount.div(web3.utils.toBN(2)))
+          .toString(),
+        "Wrong first recipient balance"
+      );
+      assert.equal(
+        actualSecondRecipientBalance[0].toString(),
+        prevSecondRecipientBalance[0]
+          .add(firstOutputAmount.sub(firstOutputAmount.div(web3.utils.toBN(2))))
+          .toString(),
+        "Wrong second recipient balance"
+      );
+    }
   });
 
   it("Batch operations with input tokens Ethers", async () => {
