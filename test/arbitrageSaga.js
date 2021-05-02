@@ -18,6 +18,8 @@ describe("ArbitrageSaga", () => {
   var AMMs;
   var arbitrageSaga;
   var feePercentage;
+  var recipientPercentages = [50, 50];
+  var recipentAddresses;
 
   before(async () => {
     await blockchainConnection.init;
@@ -36,11 +38,11 @@ describe("ArbitrageSaga", () => {
     tokens = [
       context.wethTokenAddress,
       context.usdtTokenAddress,
-      context.chainLinkTokenAddress,
+      // context.chainLinkTokenAddress,
       context.usdcTokenAddress,
       context.daiTokenAddress,
       context.mkrTokenAddress,
-      context.balTokenAddress,
+      // context.balTokenAddress,
     ].map((it) => new web3.eth.Contract(context.IERC20ABI, it));
 
     await Promise.all(
@@ -50,6 +52,11 @@ describe("ArbitrageSaga", () => {
     var ArbitrageSaga = await compile("arbitrage-saga/ArbitrageSaga.sol");
 
     feePercentage = web3.utils.toWei("0.01");
+
+    recipentAddresses = [
+      (await web3.eth.getAccounts())[1],
+      (await web3.eth.getAccounts())[2],
+    ];
 
     const doubleProxy = await ammAggregator.methods.doubleProxy().call();
 
@@ -286,19 +293,6 @@ describe("ArbitrageSaga", () => {
       inputTokenIterator = swaps[i].swapPath[swaps[i].swapPath.length - 1];
       encodedSwaps.push(encodedSwap);
     }
-    console.log("PARAMS FINALS:  ");
-    console.log(
-      "-------------------------------------------------------------------"
-    );
-    console.log(inputToken);
-    console.log(
-      "-------------------------------------------------------------------"
-    );
-    console.log(inputAmount);
-    console.log(
-      "-------------------------------------------------------------------"
-    );
-    console.log(encodedSwaps);
     return {
       inputTokenAddress: inputToken,
       inputTokenAmount: inputAmount,
@@ -323,7 +317,14 @@ describe("ArbitrageSaga", () => {
     let LPPools = [];
     for (let j = 0; j < swapPath.length; j++) {
       const LPPool = (
-        await amm.contract.methods.byTokens([tokenIterator, swapPath[j]]).call()
+        await amm.contract.methods
+          .byTokens([
+            tokenIterator,
+            swapPath[j] === utilities.voidEthereumAddress
+              ? amm.ethereumAddress
+              : swapPath[j],
+          ])
+          .call()
       )[2];
       if (LPPool === utilities.voidEthereumAddress) {
         throw Error(
@@ -414,10 +415,10 @@ describe("ArbitrageSaga", () => {
       balance < 1 ? parseInt(web3.utils.toWei(balance).toString()) : balance;
     const randomAmount = randomPlainAmount(
       100,
-      Math.floor(scaledBalance) / 100
+      Math.floor(scaledBalance / 2) / 99
     );
     return balance < 1
-      ? randomAmount
+      ? Math.floor(randomAmount)
       : web3.utils.toWei(randomAmount.toString());
   }
 
@@ -435,7 +436,7 @@ describe("ArbitrageSaga", () => {
       ammsData
     );
     const amount = await generateRandomAmount(inputToken);
-    await encodeSingleOperation(
+    operation = await encodeSingleOperation(
       inputToken,
       amount,
       swaps,
@@ -443,6 +444,7 @@ describe("ArbitrageSaga", () => {
       receivers,
       reciversPcg
     );
+    return operation;
   }
 
   function timeout(ms) {
@@ -458,34 +460,265 @@ describe("ArbitrageSaga", () => {
         const response = await functionToCheck.apply(this, arguments);
         return response;
       } catch (e) {
-        console.log(e);
         trial++;
         console.log("Trial: " + trial);
       }
     }
   }
 
+  it("Single operation with input token ERC20", async () => {
+    const operation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        1,
+        false,
+        [
+          { amm: AMMs.uniswap, numberOfTokens: 1 },
+          { amm: AMMs.sushiSwap, numberOfTokens: 1 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log("Opeartion: ", JSON.stringify(operation, censor(operation)));
+    const tokenInstance = new web3.eth.Contract(
+      context.IERC20ABI,
+      operation.inputTokenAddress
+    );
+    await tokenInstance.methods
+      .approve(arbitrageSaga.options.address, operation.inputTokenAmount)
+      .send(blockchainConnection.getSendingOptions());
+    var transaction = await arbitrageSaga.methods
+      .execute([operation])
+      .send(blockchainConnection.getSendingOptions());
+    console.log(
+      "Tranasction " +
+        transaction.transactionHash +
+        " with " +
+        transaction.gasUsed +
+        " of gas used"
+    );
+  });
+
   it("Single operation with input token Ether", async () => {
-    try {
-      const resp = await repeatUntilGood(
-        encodeRandomSingleOperation,
-        ...[
-          3,
-          true,
-          [
-            { amm: AMMs.uniswap, numberOfTokens: 2 },
-            { amm: AMMs.sushiSwap, numberOfTokens: 1 },
-            { amm: AMMs.mooniswap, numberOfTokens: 1 },
-          ],
-          "455666",
-          account,
-          ["1000000000"],
-        ]
+    const operation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        3,
+        true,
+        [
+          { amm: AMMs.uniswap, numberOfTokens: 2 },
+          { amm: AMMs.sushiSwap, numberOfTokens: 1 },
+          { amm: AMMs.mooniswap, numberOfTokens: 1 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log("Result: ", JSON.stringify(operation, censor(operation)));
+    var transaction = await arbitrageSaga.methods
+      .execute([operation])
+      .send(
+        blockchainConnection.getSendingOptions({
+          value: operation.inputTokenAmount,
+        })
       );
-      console.log("Censoring: ", resp);
-      console.log("Result: ", JSON.stringify(resp, censor(resp)));
-    } catch (e) {
-      console.log(e);
-    }
+    console.log(
+      "Tranasction " +
+        transaction.transactionHash +
+        " with " +
+        transaction.gasUsed +
+        " of gas used"
+    );
+  });
+
+  it("Batch operations with input tokens ERC20", async () => {
+    const firstOperation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        1,
+        false,
+        [
+          { amm: AMMs.uniswap, numberOfTokens: 1 },
+          { amm: AMMs.mooniswap, numberOfTokens: 1 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log(
+      "Result first operation: ",
+      JSON.stringify(firstOperation, censor(firstOperation))
+    );
+    let tokenInstance = new web3.eth.Contract(
+      context.IERC20ABI,
+      firstOperation.inputTokenAddress
+    );
+    await tokenInstance.methods
+      .approve(arbitrageSaga.options.address, firstOperation.inputTokenAmount)
+      .send(blockchainConnection.getSendingOptions());
+    const secondOperation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        1,
+        false,
+        [
+          { amm: AMMs.sushiSwap, numberOfTokens: 1 },
+          { amm: AMMs.uniswap, numberOfTokens: 1 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log(
+      "Result second operation: ",
+      JSON.stringify(secondOperation, censor(secondOperation))
+    );
+    tokenInstance = new web3.eth.Contract(
+      context.IERC20ABI,
+      secondOperation.inputTokenAddress
+    );
+    const approvalAmount =
+      firstOperation.inputTokenAddress === secondOperation.inputTokenAddress
+        ? web3.utils
+            .toBN(firstOperation.inputTokenAmount)
+            .add(web3.utils.toBN(secondOperation.inputTokenAmount))
+        : secondOperation.inputTokenAddress;
+    await tokenInstance.methods
+      .approve(arbitrageSaga.options.address, approvalAmount)
+      .send(blockchainConnection.getSendingOptions());
+    var transaction = await arbitrageSaga.methods
+      .execute([firstOperation, secondOperation])
+      .send(
+        blockchainConnection.getSendingOptions({
+          value: operation.inputTokenAmount,
+        })
+      );
+    console.log(
+      "Tranasction " +
+        transaction.transactionHash +
+        " with " +
+        transaction.gasUsed +
+        " of gas used"
+    );
+  });
+
+  it("Batch operations with input tokens Ethers", async () => {
+    const firstOperation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        2,
+        true,
+        [
+          { amm: AMMs.uniswap, numberOfTokens: 2 },
+          { amm: AMMs.mooniswap, numberOfTokens: 1 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log(
+      "Result first operation: ",
+      JSON.stringify(firstOperation, censor(firstOperation))
+    );
+    const secondOperation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        2,
+        true,
+        [
+          { amm: AMMs.sushiSwap, numberOfTokens: 1 },
+          { amm: AMMs.uniswap, numberOfTokens: 2 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log(
+      "Result second operation: ",
+      JSON.stringify(secondOperation, censor(secondOperation))
+    );
+    var transaction = await arbitrageSaga.methods
+      .execute([firstOperation, secondOperation])
+      .send(
+        blockchainConnection.getSendingOptions({
+          value: web3.utils
+            .toBN(firstOperation.inputTokenAmount)
+            .add(web3.utils.toBN(secondOperation.inputTokenAmount)),
+        })
+      );
+    console.log(
+      "Tranasction " +
+        transaction.transactionHash +
+        " with " +
+        transaction.gasUsed +
+        " of gas used"
+    );
+  });
+
+  it("Batch operations with both ERC20 tokens and Ethers", async () => {
+    const firstOperation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        1,
+        false,
+        [
+          { amm: AMMs.uniswap, numberOfTokens: 1 },
+          { amm: AMMs.sushiSwap, numberOfTokens: 1 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log(
+      "Result first operation: ",
+      JSON.stringify(firstOperation, censor(firstOperation))
+    );
+    let tokenInstance = new web3.eth.Contract(
+      context.IERC20ABI,
+      firstOperation.inputTokenAddress
+    );
+    await tokenInstance.methods
+      .approve(arbitrageSaga.options.address, firstOperation.inputTokenAmount)
+      .send(blockchainConnection.getSendingOptions());
+    const secondOperation = await repeatUntilGood(
+      encodeRandomSingleOperation,
+      ...[
+        2,
+        true,
+        [
+          { amm: AMMs.mooniswap, numberOfTokens: 1 },
+          { amm: AMMs.uniswap, numberOfTokens: 2 },
+        ],
+        0,
+        recipentAddresses,
+        recipientPercentages,
+      ]
+    );
+    console.log(
+      "Result second operation: ",
+      JSON.stringify(secondOperation, censor(secondOperation))
+    );
+    var transaction = await arbitrageSaga.methods
+      .execute([firstOperation, secondOperation])
+      .send(
+        blockchainConnection.getSendingOptions({
+          value: secondOperation.inputTokenAmount,
+        })
+      );
+    console.log(
+      "Tranasction " +
+        transaction.transactionHash +
+        " with " +
+        transaction.gasUsed +
+        " of gas used"
+    );
   });
 });
