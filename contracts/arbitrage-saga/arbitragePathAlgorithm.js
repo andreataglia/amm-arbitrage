@@ -1,3 +1,11 @@
+/** The algorithm looks for the best arbitrage path given an input token and tokenAmount.
+ *  The algorithm goes breadth first and simply brute forces all possible paths returning the one with the greatest output amount of token.
+ *  
+ * Limitations:
+ * - if breadth input is X it will only output length-X paths, no matter if there's a better shorter path.
+ * - it only takes into account AMMs with maxTokensPerLiquidityPool = 2 and hasUniqueLiquidityPools = true
+ */
+
 const Web3 = require("web3")
 const web3 = new Web3("https://mainnet.infura.io/v3/2f9984ba930b4c1d97b16392b4b6342a")
 const context = require("../../util/context.json");
@@ -16,20 +24,28 @@ const AMMAggregator = abis.AMMAggregatorABI;
 let ammAggregator;
 
 
-const BREADTH = 2;
-// algorithm DEPTH
-const tokensList = [context.usdtTokenAddress, context.daiTokenAddress, context.usdcTokenAddress];
-
+let BREADTH = 3;
 let initialTokenAddress;
 let initialTokenAmount;
+
+// algorithm DEPTH
+const tokensList = [context.usdtTokenAddress, context.daiTokenAddress, context.mkrTokenAddress, context.wethTokenAddress];
 
 let amms = [];
 
 
-async function init(inputTokenAddress, inputTokenAmount) {
+/** Returns the best path possible given the set BREADTH. 
+ * sample object returned:
+ *  ammPlugin:(3) ['0xFC1665BD717dB247CDFB3a08b1d496D1588a6340', '0xFC1665BD717dB247CDFB3a08b1d496D1588a6340', '0xFC1665BD717dB247CDFB3a08b1d496D1588a6340']
+    liquidityPoolAddresses:(3) ['0xA478c2975Ab1Ea89e8196811F51A7B7Ade33eB11', '0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852', '0xB20bd5D04BE54f870D5C0d3cA85d82b34B836405']
+    outputAmount:'9925268410941960287'
+    swapPath:(3) ['0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', '0xdAC17F958D2ee523a2206206994597C13D831ec7', '0x6b175474e89094c44da98b954eedeac495271d0f']
+ * */
+async function init(inputTokenAddress, inputTokenAmount, breadth) {
     ammAggregator = new web3.eth.Contract(AMMAggregator, ammAggregatorAddress);
     initialTokenAddress = inputTokenAddress;
     initialTokenAmount = inputTokenAmount;
+    BREADTH = breadth;
 
     // fetch amms infos
     const ammPluginAddresses = await ammAggregator.methods.amms().call();
@@ -42,7 +58,7 @@ async function init(inputTokenAddress, inputTokenAmount) {
             name: info[0],
             version: info[1],
             ethereumAddress: data[0],
-            maxTokensPerLiquidityPool: data[1], // this is ignored by the algorithm
+            maxTokensPerLiquidityPool: data[1],
             hasUniqueLiquidityPools: data[2]
         })
     }));
@@ -56,16 +72,8 @@ async function init(inputTokenAddress, inputTokenAmount) {
     }
     const res = await findBestArbitragePathForInputToken(inputTokenAddress, inputTokenAmount, initialEmptySwapData);
     console.log(res);
-
-    // struct ArbitrageSagaSwap {
-    //     address ammPlugin;
-    //     address[] liquidityPoolAddresses;
-    //     address[] swapPath;
     
-    //     bool enterInETH;
-    //     bool exitInETH;
-    // }
-    
+    return res;
 }
 
 // try out all possible arbitrage paths with with depth limited by the token list, and breadth limited by a fixed constant
@@ -99,10 +107,13 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
             }
         }
     }
+    if(results.length > 0){
+        return results.reduce((a,b) => {
+            return new web3.utils.BN(a.outputAmount).gt(new web3.utils.BN(b.outputAmount)) ? a : b;
+        })
+    }
+    return null;
     
-    return results.reduce((a,b) => {
-        return new web3.utils.BN(a.outputAmount).gt(new web3.utils.BN(b.outputAmount)) ? a : b;
-    })
 }
 
 
@@ -206,4 +217,4 @@ async function fixTokenDecimalsFrom18ToLower(tokenAddress, tokenAmount) {
 
 
 // breadth-first algorithm to find a viable arbitrage path
-init(context.daiTokenAddress, utilities.toDecimals('10', '18'));
+init(context.daiTokenAddress, utilities.toDecimals('10', '18'), 4);
