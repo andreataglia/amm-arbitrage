@@ -29,24 +29,32 @@ let BREADTH;
 let initialTokenAddress;
 let initialTokenAmount;
 
-// algorithm DEPTH
-const tokensList = [context.usdtTokenAddress, context.daiTokenAddress, context.mkrTokenAddress, context.wethTokenAddress];
+// algorithm DEPTH : default list
+let tokensList = [context.usdtTokenAddress, context.mkrTokenAddress, context.wethTokenAddress];
 
 let amms = [];
 
 
 /** Returns the best path possible given the set BREADTH. 
  * sample object returned:
+ * {
  *  ammPlugin:(3) ['0xFC1665BD717dB247CDFB3a08b1d496D1588a6340', '0xFC1665BD717dB247CDFB3a08b1d496D1588a6340', '0xFC1665BD717dB247CDFB3a08b1d496D1588a6340']
     liquidityPoolAddresses:(3) ['0xA478c2975Ab1Ea89e8196811F51A7B7Ade33eB11', '0x0d4a11d5EEaaC28EC3F61d100daF4d40471f1852', '0xB20bd5D04BE54f870D5C0d3cA85d82b34B836405']
     outputAmount:'9925268410941960287'
     swapPath:(3) ['0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', '0xdAC17F958D2ee523a2206206994597C13D831ec7', '0x6b175474e89094c44da98b954eedeac495271d0f']
+ * }
  * */
-async function init(inputTokenAddress, inputTokenAmount, breadth) {
+async function init(inputTokenAddress, inputTokenAmount, breadth, tokensDepth) {
+    console.log('arbitrage path algorithm started computing...')
     ammAggregator = new web3.eth.Contract(AMMAggregator, ammAggregatorAddress);
     initialTokenAddress = inputTokenAddress;
     initialTokenAmount = inputTokenAmount;
     BREADTH = breadth;
+    tokensList = tokensDepth;
+
+    if(!tokensList.includes(inputTokenAddress)){
+        tokensList.push(inputTokenAddress);
+    }
 
     // fetch amms infos
     const ammPluginAddresses = await ammAggregator.methods.amms().call();
@@ -235,6 +243,6 @@ async function fixTokenDecimalsFrom18ToLower(tokenAddress, tokenAmount) {
 
 
 // breadth-first algorithm to find a viable arbitrage path
-init(context.daiTokenAddress, utilities.toDecimals('10', '18'), 4);
+init(context.wethTokenAddress, utilities.toDecimals('10', '18'), 2, [context.usdtTokenAddress, context.mkrTokenAddress, context.wethTokenAddress]);
 
 exports.findBestArbitragePath = init;
