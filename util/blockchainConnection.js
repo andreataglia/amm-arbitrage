@@ -7,7 +7,7 @@ module.exports = {
                 gasLimit: 10000000,
                 db: require('memdown')(),
                 total_accounts: 15,
-                default_balance_ether: 9999999999999999999
+                default_balance_ether: 999
             };
             if (process.env.blockchain_connection_string) {
                 options.fork = process.env.blockchain_connection_string;
