@@ -16,7 +16,7 @@ const AMMAggregator = abis.AMMAggregatorABI;
 let ammAggregator;
 
 
-const BREADTH = 3;
+const BREADTH = 2;
 // algorithm DEPTH
 const tokensList = [context.usdtTokenAddress, context.daiTokenAddress, context.usdcTokenAddress];
 
@@ -70,14 +70,12 @@ async function init(inputTokenAddress, inputTokenAmount) {
 
 // try out all possible arbitrage paths with with depth limited by the token list, and breadth limited by a fixed constant
 async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, swapData) {
-    // algorithm reached an end. find an exit path by swapping back with initial token
-    if(swapData.swapPath.length >= BREADTH - 1){
-        const outputAmount = await calculateSwapOutput(inputToken, inputTokenAmount, initialTokenAddress);
-        if(outputAmount){
-            const newSwapData = swapData;
-            newSwapData.outputAmount = outputAmount;
-            newSwapData.swapPath = swapData.swapPath.concat(initialTokenAddress);
-            return newSwapData;
+    // algorithm reached an end. only returns if we got out into the initial token. Otherwise the path is not viable as the output token differs from the input token
+    if(swapData.swapPath.length >= BREADTH){
+        if(inputToken === initialTokenAddress){
+            swapData.outputAmount = inputTokenAmount;
+            swapData.swapPath = swapData.swapPath;
+            return swapData;
         }
         return null;
     }
@@ -87,12 +85,14 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
     for (let i = 0; i < tokensList.length; i++) {
         const nextTokenToSwap = tokensList[i];   
         // TODO: find bets swap amount with all exchange before going ahead. nextTokenToSwap must be evalued for all pools
-        const newAmount = await calculateSwapOutput(inputToken, inputTokenAmount, nextTokenToSwap);
+        const swapResult = await calculateSwapOutput(inputToken, inputTokenAmount, nextTokenToSwap);
         // if swapOuput doesn't return a truly value the swap just can't happen (for instance, same tokens). skip it 
-        if(newAmount){
-            const newSwapData = swapData;
-            newSwapData.swapPath = swapData.swapPath.concat(inputToken);
-            const nextArbitrageHop = await findBestArbitragePathForInputToken(nextTokenToSwap, newAmount, newSwapData);
+        if(swapResult){
+            const newSwapData = {...swapData};
+            newSwapData.swapPath = swapData.swapPath.concat(nextTokenToSwap);
+            newSwapData.liquidityPoolAddresses = swapData.liquidityPoolAddresses.concat(swapResult.liquidityPoolAddress);
+            newSwapData.ammPlugin = swapData.ammPlugin.concat(swapResult.ammPlugin);
+            const nextArbitrageHop = await findBestArbitragePathForInputToken(nextTokenToSwap, swapResult.tokenOutput, newSwapData);
             // if nextArbitrageHop doesn't find a suitable nextHop just ignore it
             if(nextArbitrageHop){
                 results.push(nextArbitrageHop);
@@ -108,7 +108,7 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
 
 // returns the token output for that pool, for that AMM
 // only single pairs calculation.
-// checks the best amm where to swap that pair, that value is what is returned
+// TODO: checks the best amm where to swap that pair, that value is what is returned
 async function calculateSwapOutput(inputTokenAddress, inputTokenAmount, outputTokenAddress) {
     if(inputTokenAddress === outputTokenAddress) return null;
     // TODO: need to find the path for all the available amms
@@ -129,7 +129,11 @@ async function calculateSwapOutput(inputTokenAddress, inputTokenAmount, outputTo
         // last position of swapResult contains the swap final token amount
         const tokenOutput = await fixTokenDecimalsTo18(outputTokenAddress, swapResult[swapResult.length - 1]);
 
-        return tokenOutput;
+        return {
+            tokenOutput,
+            ammPlugin: uniswapv2AmmPlugin.contract._address,
+            liquidityPoolAddress: LPAddress
+        };
     }
     // the swap is just not happening
     return null;
