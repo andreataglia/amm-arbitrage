@@ -1,8 +1,7 @@
-/** The algorithm looks for the best arbitrage path given an input token and tokenAmount.
+/** The algorithm looks for the best arbitrage path given an input token, a tokenAmount and a max breadth to be reached.
  *  The algorithm goes breadth first and simply brute forces all possible paths returning the one with the greatest output amount of token.
  *  
  * Limitations:
- * - if breadth input is X it will only output length-X paths, no matter if there's a better shorter path
  * - it only takes into account AMMs with maxTokensPerLiquidityPool = 2 and hasUniqueLiquidityPools = true
  * - the algo is pretty damn stupid and plenty of room for optimization
  */
@@ -48,6 +47,11 @@ let amms = [];
  * }
  * */
 async function init(inputTokenAddress, inputTokenAmount, breadth, tokensDepth) {
+    if(breadth <= 1){
+        console.error('Breadth must be min 2');
+        return; 
+    }
+
     console.log('arbitrage path algorithm started computing...')
     ammAggregator = new web3.eth.Contract(AMMAggregator, ammAggregatorAddress);
     initialTokenAddress = inputTokenAddress;
@@ -116,7 +120,7 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
         // if swapOuput doesn't return a truly value the swap just can't happen (for instance, same tokens). skip it 
         if(swapResult) {
             const newSwapData = {...swapData};
-            newSwapData.swapPath = swapData.swapPath.concat(nextTokenToSwap);
+            newSwapData.swapPath = swapData.swapPath.concat(swapResult.tokenOut);
             newSwapData.liquidityPoolAddresses = swapData.liquidityPoolAddresses.concat(swapResult.liquidityPoolAddress);
             newSwapData.ammPlugin = swapData.ammPlugin.concat(swapResult.ammPlugin);
             const nextArbitrageHop = await findBestArbitragePathForInputToken(nextTokenToSwap, swapResult.tokenOutput, newSwapData);
@@ -145,20 +149,39 @@ async function calculateSwapOutput(inputTokenAddress, inputTokenAmount, outputTo
     for (let i = 0; i < amms.length; i++) {
         try {
             const amm = amms[i];
-            const LPAddress = await fetchLPAddress([inputTokenAddress, outputTokenAddress], amm);
+            let inputTokenAddressForAMM = inputTokenAddress;
+            let outputTokenAddressForAMM = outputTokenAddress;
+
+            // if void address (i.e. ethereum native token) translate inputTokenAddress into amm's wrapped ETH
+            if(inputTokenAddress === utilities.voidEthereumAddress){
+                if(amm.ethereumAddress === utilities.voidEthereumAddress) {
+                    // the amm doesn't have a specific weth. ignore it and keep going
+                    continue;
+                }
+                inputTokenAddressForAMM = amm.ethereumAddress;
+            }
+            if(outputTokenAddress === utilities.voidEthereumAddress){
+                if(amm.ethereumAddress === utilities.voidEthereumAddress) {
+                    // the amm doesn't have a specific weth. ignore it and keep going
+                    continue;
+                }
+                outputTokenAddressForAMM = amm.ethereumAddress;
+            }
+
+            const LPAddress = await fetchLPAddress([inputTokenAddressForAMM, outputTokenAddressForAMM], amm);
             if(LPAddress) {
-                const swapData = await retrieveSwapData([inputTokenAddress, outputTokenAddress], amm);
+                const swapData = await retrieveSwapData([inputTokenAddressForAMM, outputTokenAddressForAMM], amm);
                     
                 // some tokens don't have 18 decimals... jerks. fix the amount to be with as much decimals as required by the input token
-                const fixedInputAmount = await fixTokenDecimalsFrom18ToLower(inputTokenAddress, inputTokenAmount);
+                const fixedInputAmount = await fixTokenDecimalsFrom18ToLower(inputTokenAddressForAMM, inputTokenAmount);
             
                 // getSwapOutput: Pass a token address, the desired amount to swap, an array containing the LP addresses involved in the swap operation and an array representing the path the operation must follow, 
                 // and retrieve an array containing the amount of tokens used during the swap operation, including the final token amount (in the last position) and the input token amount (in the first position).
-                const swapResult = await amm.contract.methods.getSwapOutput(inputTokenAddress, fixedInputAmount, swapData.swapPools, swapData.swapTokens).call();
+                const swapResult = await amm.contract.methods.getSwapOutput(inputTokenAddressForAMM, fixedInputAmount, swapData.swapPools, swapData.swapTokens).call();
                     
                 // some tokens don't have 18 decimals... jerks
                 // last position of swapResult contains the swap final token amount
-                const tokenOutput = await fixTokenDecimalsTo18(outputTokenAddress, swapResult[swapResult.length - 1]);
+                const tokenOutput = await fixTokenDecimalsTo18(outputTokenAddressForAMM, swapResult[swapResult.length - 1]);
                     
                 // update best amm result
                 if(bestResult){
@@ -166,14 +189,16 @@ async function calculateSwapOutput(inputTokenAddress, inputTokenAmount, outputTo
                         bestResult = {
                             tokenOutput,
                                 ammPlugin: amm.contract._address,
-                                liquidityPoolAddress: LPAddress
+                                liquidityPoolAddress: LPAddress,
+                                tokenOut: outputTokenAddressForAMM
                             };
                         }
                     }else{
                         bestResult = {
                             tokenOutput,
                             ammPlugin: amm.contract._address,
-                            liquidityPoolAddress: LPAddress
+                            liquidityPoolAddress: LPAddress,
+                            tokenOut: outputTokenAddressForAMM
                         };
                     }
                 }
@@ -218,7 +243,7 @@ async function fetchLPAddress(tokens, ammPlugin) {
         const pool = (await ammPlugin.contract.methods.byTokens(tokens).call())[2]; 
         return pool && pool !== utilities.voidEthereumAddress ? pool : null;
     }catch(err){
-        // no pool found for any reason. not even need to print the error
+        // no pool found for some reason. not even need to print the error, just can happen
         return null;
     }
     // TODO: if the ammPlugin doesn't have uniqueLPs - i.e. balancer - hardcode them here and simply look them up.
@@ -252,6 +277,6 @@ async function fixTokenDecimalsFrom18ToLower(tokenAddress, tokenAmount) {
 
 
 // breadth-first algorithm to find a viable arbitrage path
-init(context.buidlTokenAddress, utilities.toDecimals('100', '18'), 6, [context.mkrTokenAddress, context.daiTokenAddress, context.wethTokenAddress]);
+init(context.daiTokenAddress, utilities.toDecimals('10', '18'), 2, [utilities.voidEthereumAddress]);
 
 exports.findBestArbitragePath = init;
