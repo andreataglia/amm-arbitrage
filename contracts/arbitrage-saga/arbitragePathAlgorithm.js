@@ -1,9 +1,11 @@
 /** The algorithm looks for the best arbitrage path given an input token, a tokenAmount and a max breadth to be reached.
  *  The algorithm goes breadth first and simply brute forces all possible paths returning the one with the greatest output amount of token.
  *  
+ * Entering in ETH is possible by giving 0x000...00 address as input. It will come out with a path that has WETH of some AMM as output.
+ * 
  * Limitations:
  * - it only takes into account AMMs with maxTokensPerLiquidityPool = 2 and hasUniqueLiquidityPools = true
- * - the algo is pretty damn stupid and plenty of room for optimization
+ * - plenty of room for optimization, but now at least is slightly less stupid and way quicker :)
  */
 
 const Web3 = require("web3")
@@ -63,6 +65,8 @@ async function init(inputTokenAddress, inputTokenAmount, breadth, tokensDepth) {
         tokensList.push(inputTokenAddress);
     }
 
+    let wethAddresses = [];
+
     // fetch amms infos
     const ammPluginAddresses = await ammAggregator.methods.amms().call();
     await Promise.all(ammPluginAddresses.map(async ammPluginAddress => {
@@ -79,6 +83,10 @@ async function init(inputTokenAddress, inputTokenAmount, breadth, tokensDepth) {
         };
         if(amm.hasUniqueLiquidityPools && amm.maxTokensPerLiquidityPool === '2'){
             amms.push(amm);
+            // update list of unique weth addresses
+            if(amm.ethereumAddress !== utilities.voidEthereumAddress && wethAddresses.indexOf(amm.ethereumAddress) === -1) {
+                wethAddresses.push(amm.ethereumAddress);
+            }
         }
     }));
 
@@ -89,10 +97,22 @@ async function init(inputTokenAddress, inputTokenAmount, breadth, tokensDepth) {
         swapPath: [],
         outputAmount: '0'
     }
-    const res = await findBestArbitragePathForInputToken(inputTokenAddress, inputTokenAmount, initialEmptySwapData);
-    console.log(res);
-    
-    return res;
+
+    // when input token is void (i.e. ETH) add all weth to
+    let validInputAddresses = [];
+    inputTokenAddress === utilities.voidEthereumAddress ? validInputAddresses = validInputAddresses.concat(wethAddresses) : validInputAddresses.push(inputTokenAddress); 
+
+    let results = [];
+    for (let i = 0; i < validInputAddresses.length; i++) {
+        const arbitrageResult = await findBestArbitragePathForInputToken(validInputAddresses[i], inputTokenAmount, initialEmptySwapData);
+        if(arbitrageResult){
+            results.push(arbitrageResult);
+        }
+    }
+    const bestPath = evaluateBestPath(results);
+    console.log(bestPath);
+
+    return bestPath;
 }
 
 // try out all possible arbitrage paths with with depth limited by the token list, and breadth limited by a fixed constant
@@ -130,13 +150,17 @@ async function findBestArbitragePathForInputToken(inputToken, inputTokenAmount, 
             }
         }
     }
-    if(results.length > 0){
-        return results.reduce((a,b) => {
+    
+    return evaluateBestPath(results);
+}
+
+function evaluateBestPath(swapResults) {
+    if(swapResults.length > 0) {
+        return swapResults.reduce((a,b) => {
             return new web3.utils.BN(a.outputAmount).gt(new web3.utils.BN(b.outputAmount)) ? a : b;
         })
     }
     return null;
-    
 }
 
 
@@ -277,6 +301,6 @@ async function fixTokenDecimalsFrom18ToLower(tokenAddress, tokenAmount) {
 
 
 // breadth-first algorithm to find a viable arbitrage path
-init(context.daiTokenAddress, utilities.toDecimals('10', '18'), 2, [utilities.voidEthereumAddress]);
+init(context.buidlTokenAddress, utilities.toDecimals('10', '18'), 4, [utilities.voidEthereumAddress, context.buidlTokenAddress, context.usdcTokenAddress]);
 
 exports.findBestArbitragePath = init;
