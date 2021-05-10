@@ -9,7 +9,7 @@
  */
 
 const Web3 = require("web3")
-const web3 = new Web3("https://mainnet.infura.io/v3/2f9984ba930b4c1d97b16392b4b6342a")
+const web3 = new Web3("https://mainnet.infura.io/v3/7f0947027dbe4c01b568cb62c00306b2")
 const context = require("../../util/context.json");
 const utilities = require("../../util/utilities");
 const abis = require("../../data/abis.json");
@@ -84,7 +84,7 @@ async function init(inputTokenAddress, inputTokenAmount, breadth, tokensDepth) {
         if(amm.hasUniqueLiquidityPools && amm.maxTokensPerLiquidityPool === '2'){
             amms.push(amm);
             // update list of unique weth addresses
-            if(amm.ethereumAddress !== utilities.voidEthereumAddress && wethAddresses.indexOf(amm.ethereumAddress) === -1) {
+            if(wethAddresses.indexOf(amm.ethereumAddress) === -1) {
                 wethAddresses.push(amm.ethereumAddress);
             }
         }
@@ -178,17 +178,9 @@ async function calculateSwapOutput(inputTokenAddress, inputTokenAmount, outputTo
 
             // if void address (i.e. ethereum native token) translate inputTokenAddress into amm's wrapped ETH
             if(inputTokenAddress === utilities.voidEthereumAddress){
-                if(amm.ethereumAddress === utilities.voidEthereumAddress) {
-                    // the amm doesn't have a specific weth. ignore it and keep going
-                    continue;
-                }
                 inputTokenAddressForAMM = amm.ethereumAddress;
             }
             if(outputTokenAddress === utilities.voidEthereumAddress){
-                if(amm.ethereumAddress === utilities.voidEthereumAddress) {
-                    // the amm doesn't have a specific weth. ignore it and keep going
-                    continue;
-                }
                 outputTokenAddressForAMM = amm.ethereumAddress;
             }
 
@@ -276,6 +268,7 @@ async function fetchLPAddress(tokens, ammPlugin) {
 
 // expecting the token amount to be the base contract one. returns that value fixed to 1e18
 async function fixTokenDecimalsTo18(tokenAddress, tokenAmount) {
+    if(tokenAddress === utilities.voidEthereumAddress) return tokenAmount;
     const tokenContract = new web3.eth.Contract(abis.IERC20ABI, tokenAddress);
     const decimals = parseInt(await tokenContract.methods.decimals().call());
     if(decimals === 18) return tokenAmount;
@@ -288,6 +281,7 @@ async function fixTokenDecimalsTo18(tokenAddress, tokenAmount) {
 
 // usdc for instance expects the decimals to be 6. the function expects a 18 decimals input and throws back with the decimals needed by the token
 async function fixTokenDecimalsFrom18ToLower(tokenAddress, tokenAmount) {
+    if(tokenAddress === utilities.voidEthereumAddress) return tokenAmount;
     const tokenContract = new web3.eth.Contract(abis.IERC20ABI, tokenAddress);
     let decimals = await tokenContract.methods.decimals().call();
     decimals = parseInt(decimals);
